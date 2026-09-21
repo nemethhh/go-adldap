@@ -189,6 +189,8 @@ func (c *Client) Close() error { return c.core.pool.Close() }
 func (c *Client) Directory() adcore.Directory {
 	return adcore.Directory{
 		OU:     &ouDirectory{c: c.core},
+		Group:  &groupDirectory{c: c.core},
+		User:   &userDirectory{c: c.core},
 		Server: c.core.server,
 		DNC:    c.core.dnc,
 		Closer: c,
