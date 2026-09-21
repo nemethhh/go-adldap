@@ -25,8 +25,6 @@ func TestUnimplementedClassesReportUnsupported(t *testing.T) {
 	ctx := context.Background()
 
 	for name, call := range map[string]func() error{
-		"ACL.Get":        func() error { _, err := d.ACL.Get(ctx, adcore.ByGUID("x")); return err },
-		"ACL.Grant":      func() error { return d.ACL.Grant(ctx, adcore.ByGUID("x"), nil) },
 		"Schema.Resolve": func() error { _, err := d.Schema.Resolve(ctx, nil); return err },
 	} {
 		t.Run(name, func(t *testing.T) {
