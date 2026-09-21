@@ -207,7 +207,7 @@ func (c *Client) Directory() adcore.Directory {
 		OU:             &ouDirectory{c: c.core},
 		Group:          &groupDirectory{c: c.core},
 		User:           &userDirectory{c: c.core},
-		ServiceAccount: unsupportedServiceAccount{},
+		ServiceAccount: &serviceAccountDirectory{c: c.core},
 		Computer:       &computerDirectory{c: c.core},
 		ACL:            unsupportedACL{},
 		Schema:         unsupportedSchema{},
