@@ -35,6 +35,10 @@ func StartMemory(t *testing.T) *MemServer {
 	m.Seed(DNC, map[string][][]byte{
 		"objectClass":       {[]byte("top"), []byte("domainDNS")},
 		"distinguishedName": {[]byte(DNC)},
+		// The naming context carries the domain SID. Every principal
+		// descriptor is built from it, so without one the gMSA and RBCD
+		// writes have nothing to name Domain Admins with.
+		"objectSid": {DomainSID},
 	})
 	return m
 }
@@ -216,6 +220,7 @@ func (c *memConn) Add(ctx context.Context, dn string, add []conn.Attribute) erro
 	attrs["nTSecurityDescriptor"] = [][]byte{emptyDescriptor()}
 	attrs["distinguishedName"] = [][]byte{[]byte(dn)}
 	attrs["name"] = [][]byte{[]byte(rdnValue(dn))}
+	stampSID(attrs, 1000+c.m.seq)
 	c.m.entries[dn] = attrs
 	return nil
 }

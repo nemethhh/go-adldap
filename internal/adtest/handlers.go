@@ -199,6 +199,14 @@ func matchFilter(filter string, attrs map[string][][]byte) bool {
 	}
 	unescaped := unescapeFilterValue(want)
 	for _, v := range vals {
+		// objectSid is binary on the wire but asserted in its S-1-5-… text
+		// form, which is what AD accepts and what adcore.Equal emits.
+		if strings.EqualFold(attr, "objectSid") {
+			if sidMatches(v, unescaped) {
+				return true
+			}
+			continue
+		}
 		if matchValue(string(v), unescaped) {
 			return true
 		}
@@ -344,6 +352,7 @@ func (s *Server) handleAdd(w *gldap.ResponseWriter, r *gldap.Request) {
 	attrs["objectGUID"] = [][]byte{s.nextGUID()}
 	attrs["distinguishedName"] = [][]byte{[]byte(m.DN)}
 	attrs["name"] = [][]byte{[]byte(rdnValue(m.DN))}
+	stampSID(attrs, 1000+s.seq)
 	s.Seed(m.DN, attrs)
 
 	resp = r.NewResponse(gldap.WithApplicationCode(gldap.ApplicationAddResponse),

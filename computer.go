@@ -173,6 +173,18 @@ func (cd *computerDirectory) Create(ctx context.Context, spec adcore.ComputerSpe
 		add = append(add, conn.Attribute{Type: "accountExpires",
 			Vals: [][]byte{[]byte(attrs.TimeToFileTime(spec.AccountExpiration.Value()))}})
 	}
+	// This attribute takes no SD-flags control. It is an ordinary binary
+	// attribute that happens to hold a descriptor; it is not
+	// nTSecurityDescriptor, and sending the control with it is refused.
+	if spec.PrincipalsAllowed != nil {
+		sd, err := cd.c.principalSDValue(ctx, op, spec.PrincipalsAllowed)
+		if err != nil {
+			return nil, err
+		}
+		add = append(add, conn.Attribute{
+			Type: "msDS-AllowedToActOnBehalfOfOtherIdentity", Vals: [][]byte{sd},
+		})
+	}
 
 	if err := cd.c.withConn(ctx, op, func(cn conn.Conn) error {
 		return cn.Add(ctx, dn, add)
@@ -197,6 +209,11 @@ func (cd *computerDirectory) Get(ctx context.Context, id adcore.Identity) (*adco
 	if err != nil {
 		return nil, &adcore.Error{Kind: adcore.KindTransport, Op: op, Err: err}
 	}
+	if raw := e.First("msDS-AllowedToActOnBehalfOfOtherIdentity"); len(raw) > 0 {
+		if m.PrincipalsAllowed, err = cd.c.principalGUIDs(ctx, op, raw); err != nil {
+			return nil, err
+		}
+	}
 	return m, nil
 }
 
@@ -211,6 +228,11 @@ func (cd *computerDirectory) Search(ctx context.Context, q adcore.Query) ([]adco
 		m, err := cd.model(e)
 		if err != nil {
 			return nil, &adcore.Error{Kind: adcore.KindTransport, Op: op, Err: err}
+		}
+		if raw := e.First("msDS-AllowedToActOnBehalfOfOtherIdentity"); len(raw) > 0 {
+			if m.PrincipalsAllowed, err = cd.c.principalGUIDs(ctx, op, raw); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, *m)
 	}
@@ -257,6 +279,21 @@ func (cd *computerDirectory) Update(ctx context.Context, id adcore.Identity, spe
 		mods = append(mods, conn.Modification{
 			Op: conn.ModReplace, Type: "msDS-SupportedEncryptionTypes",
 			Vals: [][]byte{[]byte(attrs.Uint32String(attrs.EncTypeBits(*spec.KerberosEncryptionType)))},
+		})
+	}
+
+	// nil leaves RBCD alone; a non-nil slice, empty or not, replaces it. An
+	// empty slice writes a present-but-empty DACL, which is "nobody may
+	// impersonate here" — deleting the attribute instead would mean something
+	// different.
+	if spec.PrincipalsAllowed != nil {
+		sd, err := cd.c.principalSDValue(ctx, op, spec.PrincipalsAllowed)
+		if err != nil {
+			return nil, adcore.WithIdentity(err, op, id)
+		}
+		mods = append(mods, conn.Modification{
+			Op: conn.ModReplace, Type: "msDS-AllowedToActOnBehalfOfOtherIdentity",
+			Vals: [][]byte{sd},
 		})
 	}
 

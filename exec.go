@@ -24,6 +24,10 @@ type core struct {
 	repl  ReplicationConfig
 	locks *adcore.KeyedMutex
 	log   Logger
+
+	// dsid caches the domain SID, which every principal descriptor needs and
+	// which cannot change under a pinned DC.
+	dsid domainSIDCache
 }
 
 // withConn runs one operation on a pooled connection, classifies its failure,

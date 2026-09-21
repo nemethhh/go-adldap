@@ -77,6 +77,7 @@ func Start(t *testing.T) *Server {
 	srv.Seed(DNC, map[string][][]byte{
 		"objectClass":       {[]byte("top"), []byte("domainDNS")},
 		"distinguishedName": {[]byte(DNC)},
+		"objectSid":         {DomainSID},
 	})
 
 	s, err := gldap.NewServer()
