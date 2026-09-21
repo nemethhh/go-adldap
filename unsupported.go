@@ -27,59 +27,9 @@ func unsupported(op, what string) error {
 }
 
 const (
-	whatServiceAccount = "group Managed Service Accounts"
-	whatComputer       = "computer accounts"
-	whatACL            = "access control entries"
-	whatSchema         = "schema resolution"
+	whatACL    = "access control entries"
+	whatSchema = "schema resolution"
 )
-
-type unsupportedServiceAccount struct{}
-
-var _ adcore.ServiceAccountDirectory = unsupportedServiceAccount{}
-
-func (unsupportedServiceAccount) Create(context.Context, adcore.GMSASpec) (*adcore.GMSA, error) {
-	return nil, unsupported("ServiceAccount.Create", whatServiceAccount)
-}
-
-func (unsupportedServiceAccount) Get(context.Context, adcore.Identity) (*adcore.GMSA, error) {
-	return nil, unsupported("ServiceAccount.Get", whatServiceAccount)
-}
-
-func (unsupportedServiceAccount) Search(context.Context, adcore.Query) ([]adcore.GMSA, error) {
-	return nil, unsupported("ServiceAccount.Search", whatServiceAccount)
-}
-
-func (unsupportedServiceAccount) Update(context.Context, adcore.Identity, adcore.GMSASpec) (*adcore.GMSA, error) {
-	return nil, unsupported("ServiceAccount.Update", whatServiceAccount)
-}
-
-func (unsupportedServiceAccount) Delete(context.Context, adcore.Identity) error {
-	return unsupported("ServiceAccount.Delete", whatServiceAccount)
-}
-
-type unsupportedComputer struct{}
-
-var _ adcore.ComputerDirectory = unsupportedComputer{}
-
-func (unsupportedComputer) Create(context.Context, adcore.ComputerSpec) (*adcore.Computer, error) {
-	return nil, unsupported("Computer.Create", whatComputer)
-}
-
-func (unsupportedComputer) Get(context.Context, adcore.Identity) (*adcore.Computer, error) {
-	return nil, unsupported("Computer.Get", whatComputer)
-}
-
-func (unsupportedComputer) Search(context.Context, adcore.Query) ([]adcore.Computer, error) {
-	return nil, unsupported("Computer.Search", whatComputer)
-}
-
-func (unsupportedComputer) Update(context.Context, adcore.Identity, adcore.ComputerSpec) (*adcore.Computer, error) {
-	return nil, unsupported("Computer.Update", whatComputer)
-}
-
-func (unsupportedComputer) Delete(context.Context, adcore.Identity) error {
-	return unsupported("Computer.Delete", whatComputer)
-}
 
 type unsupportedACL struct{}
 
