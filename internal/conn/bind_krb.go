@@ -127,3 +127,7 @@ func annotateTicketError(err error) error {
 	}
 	return err
 }
+
+// SPNForTest exposes the resolved service principal, which is not otherwise
+// observable without a KDC.
+func (b KerberosBinder) SPNForTest() string { return b.spn() }

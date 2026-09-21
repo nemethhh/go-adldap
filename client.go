@@ -31,7 +31,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	other, err := cfg.otherDialer(binder)
+	other, err := cfg.otherDialer()
 	if err != nil {
 		return nil, err
 	}
@@ -150,8 +150,16 @@ func newClient(ctx context.Context, cfg Config, dial func(context.Context) (conn
 	return &Client{core: c}, nil
 }
 
-// binder turns the configured auth block into a conn.Binder.
-func (c Config) binder() (conn.Binder, error) {
+// binder turns the configured auth block into a conn.Binder for the pinned DC.
+func (c Config) binder() (conn.Binder, error) { return c.binderForHost(c.Server) }
+
+// binderForHost is binder for a specific host. The host matters to Kerberos and
+// only to Kerberos: the SPN defaults to ldap/<host>, so reusing the pinned DC's
+// binder against a second controller presents a ticket for the wrong service.
+// AD refuses it, the replication probe never sees the object, and the wait spins
+// to its deadline — a timeout that looks like slow replication and is actually a
+// bad SPN.
+func (c Config) binderForHost(host string) (conn.Binder, error) {
 	switch {
 	case c.Simple != nil:
 		return conn.SimpleBinder{
@@ -166,7 +174,7 @@ func (c Config) binder() (conn.Binder, error) {
 			Realm:        c.Kerberos.Realm,
 			Krb5ConfPath: c.Kerberos.Krb5ConfPath,
 			SPN:          c.Kerberos.SPN,
-			Host:         c.Server,
+			Host:         host,
 		}, nil
 	case c.NTLM != nil:
 		return conn.NTLMBinder{
@@ -212,7 +220,7 @@ func (c *Client) Directory() adcore.Directory {
 // otherDialer dials a DC other than the pinned one, with the same TLS
 // configuration, port and bind. It is used only by the replication wait, which
 // has to observe a write arriving somewhere the pool never goes.
-func (cfg Config) otherDialer(binder conn.Binder) (func(context.Context, string) (conn.Conn, error), error) {
+func (cfg Config) otherDialer() (func(context.Context, string) (conn.Conn, error), error) {
 	port := cfg.Port
 	if port == 0 {
 		port = DefaultPort(cfg.TLS)
@@ -236,6 +244,12 @@ func (cfg Config) otherDialer(binder conn.Binder) (func(context.Context, string)
 			clone := tlsCfg.Clone()
 			clone.ServerName = host
 			tlsCfg = clone
+		}
+		// The binder is rebuilt for this host, not reused: an explicit SPN
+		// still wins, but the default follows the host actually dialled.
+		binder, err := cfg.binderForHost(host)
+		if err != nil {
+			return nil, err
 		}
 		cn, err := conn.Dial(ctx, conn.DialOptions{
 			Host: host, Port: port, StartTLS: cfg.TLS == TLSStartTLS,

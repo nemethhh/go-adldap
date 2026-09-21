@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/go-ldap/ldap/v3 v3.4.14
+	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/jimlambrt/gldap v0.1.14
 	github.com/nemethhh/go-adcore v0.0.0
 )
@@ -21,7 +22,6 @@ require (
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
 	github.com/jcmturner/gofork v1.7.6 // indirect
 	github.com/jcmturner/goidentity/v6 v6.0.1 // indirect
-	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
