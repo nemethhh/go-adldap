@@ -207,3 +207,42 @@ func ParseUint32(s string) (uint32, error) {
 
 // Uint32String formats an integer attribute for the wire, signed.
 func Uint32String(v uint32) string { return strconv.FormatInt(int64(int32(v)), 10) }
+
+// SIDFromString is the inverse of SIDToString, per MS-DTYP 2.4.2.
+//
+// The mixed endianness is the trap: the six-byte identifier authority is
+// big-endian while every sub-authority is a little-endian uint32. Writing the
+// whole thing one way produces a well-formed SID that names nothing.
+func SIDFromString(s string) ([]byte, error) {
+	parts := strings.Split(strings.TrimSpace(s), "-")
+	if len(parts) < 3 || !strings.EqualFold(parts[0], "S") {
+		return nil, fmt.Errorf("attrs: %q is not a SID", s)
+	}
+	revision, err := strconv.ParseUint(parts[1], 10, 8)
+	if err != nil {
+		return nil, fmt.Errorf("attrs: %q has no revision: %w", s, err)
+	}
+	authority, err := strconv.ParseUint(parts[2], 10, 48)
+	if err != nil {
+		return nil, fmt.Errorf("attrs: %q has no identifier authority: %w", s, err)
+	}
+	subs := parts[3:]
+	if len(subs) > 15 {
+		return nil, fmt.Errorf("attrs: %q has %d sub-authorities, at most 15 are allowed", s, len(subs))
+	}
+
+	out := make([]byte, 8, 8+4*len(subs))
+	out[0] = byte(revision)
+	out[1] = byte(len(subs))
+	for i := 0; i < 6; i++ { // big-endian, six bytes
+		out[2+i] = byte(authority >> (8 * (5 - i)))
+	}
+	for _, sub := range subs {
+		v, err := strconv.ParseUint(sub, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("attrs: %q has a bad sub-authority %q: %w", s, sub, err)
+		}
+		out = binary.LittleEndian.AppendUint32(out, uint32(v))
+	}
+	return out, nil
+}
