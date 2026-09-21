@@ -3,6 +3,7 @@ package adldap
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/nemethhh/go-adcore"
 	"github.com/nemethhh/go-adldap/internal/attrs"
@@ -10,6 +11,11 @@ import (
 )
 
 const gmsaClass = "msDS-GroupManagedServiceAccount"
+
+// defaultManagedPasswordInterval is what New-ADServiceAccount writes when the
+// caller names no interval. The attribute is mandatory on the class, so this
+// is not a convenience default — omitting it makes the create fail.
+const defaultManagedPasswordInterval = 30
 
 var gmsaAttrs = []string{
 	"objectGUID", "distinguishedName", "name", "sAMAccountName", "objectSid",
@@ -126,12 +132,19 @@ func (s *serviceAccountDirectory) Create(ctx context.Context, spec adcore.GMSASp
 		add = append(add, conn.Attribute{Type: "msDS-SupportedEncryptionTypes",
 			Vals: [][]byte{[]byte(attrs.Uint32String(attrs.EncTypeBits(*spec.KerberosEncryptionType)))}})
 	}
-	// Create-only. Sending it on an Update is refused by AD, which is why it
-	// appears here and nowhere else.
+	// msDS-ManagedPasswordInterval is the class's only systemMustContain
+	// attribute, so it is written unconditionally: New-ADServiceAccount
+	// supplies AD's own default when the caller omits one, and a raw LDAP add
+	// without it is refused with 0x207C OBJ_CLASS_VIOLATION. 30 is that
+	// default, and the provider documents reading it back. It is also
+	// create-only — AD refuses a modify — which is why it appears here and
+	// nowhere else.
+	interval := defaultManagedPasswordInterval
 	if spec.ManagedPasswordIntervalInDays != nil {
-		add = append(add, conn.Attribute{Type: "msDS-ManagedPasswordInterval",
-			Vals: [][]byte{[]byte(fmt.Sprintf("%d", *spec.ManagedPasswordIntervalInDays))}})
+		interval = *spec.ManagedPasswordIntervalInDays
 	}
+	add = append(add, conn.Attribute{Type: "msDS-ManagedPasswordInterval",
+		Vals: [][]byte{[]byte(strconv.Itoa(interval))}})
 	if spec.AccountExpiration.IsSet() {
 		add = append(add, conn.Attribute{Type: "accountExpires",
 			Vals: [][]byte{[]byte(attrs.TimeToFileTime(spec.AccountExpiration.Value()))}})

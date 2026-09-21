@@ -159,3 +159,29 @@ func TestGMSASearchAndDelete(t *testing.T) {
 		t.Errorf("Get after Delete = %v, want ErrNotFound", err)
 	}
 }
+
+// msDS-ManagedPasswordInterval is the gMSA class's only systemMustContain
+// attribute. A create that omits it is refused by a real domain with 0x207C
+// OBJ_CLASS_VIOLATION while passing against any permissive fake, which is how
+// it reached the lab: assert the wire value so it cannot regress.
+func TestGMSACreateAlwaysWritesTheManagedPasswordInterval(t *testing.T) {
+	ctx := context.Background()
+	m := adtest.StartMemory(t)
+	d := m.Directory(t)
+
+	if _, err := d.ServiceAccount.Create(ctx, adcore.GMSASpec{
+		Name: "svc-dflt", SamAccountName: "svc-dflt", Container: d.DNC,
+		DNSHostName: adcore.String("svc-dflt.corp.local"),
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	e := m.Entries()["CN=svc-dflt,"+d.DNC]
+	if len(e["msDS-ManagedPasswordInterval"]) == 0 {
+		t.Fatal("msDS-ManagedPasswordInterval was not written; AD refuses the create without it")
+	}
+	// 30 is New-ADServiceAccount's own default, so both backends report the
+	// same value for an account created without naming one.
+	if got := string(e["msDS-ManagedPasswordInterval"][0]); got != "30" {
+		t.Errorf("msDS-ManagedPasswordInterval = %q, want %q", got, "30")
+	}
+}
