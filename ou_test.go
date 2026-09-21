@@ -220,3 +220,28 @@ func TestOUOverTheWire(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 }
+
+// Protection is a Deny ACE, which this backend cannot write yet. Accepting the
+// field and ignoring it would have Terraform report an OU as protected that is
+// not — and the apply would fail with "inconsistent result after apply", which
+// names neither the field nor the reason. This was a real defect found on the
+// lab, not a hypothetical.
+func TestOUProtectedIsRefusedRatherThanIgnored(t *testing.T) {
+	ctx := context.Background()
+	d := newTestDirectory(t)
+
+	_, err := d.OU.Create(ctx, adcore.OUSpec{
+		Name: "Guarded", Container: d.DNC, Protected: adcore.Bool(true),
+	})
+	var e *adcore.Error
+	if !errors.As(err, &e) || e.Kind != adcore.KindUnsupported {
+		t.Fatalf("want KindUnsupported, got %#v", err)
+	}
+
+	// false and unset are both fine: nothing is being asked for.
+	if _, err := d.OU.Create(ctx, adcore.OUSpec{
+		Name: "Open", Container: d.DNC, Protected: adcore.Bool(false),
+	}); err != nil {
+		t.Fatalf("Protected=false must be accepted: %v", err)
+	}
+}

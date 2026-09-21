@@ -2,6 +2,7 @@ package adldap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/nemethhh/go-adcore"
@@ -41,8 +42,31 @@ func (o *ouDirectory) model(e conn.Entry) (*adcore.OU, error) {
 	}, nil
 }
 
+// refuseProtected rejects the one OUSpec field this backend cannot honour.
+//
+// ProtectedFromAccidentalDeletion is a Deny ACE for Delete and DeleteTree on
+// the object's security descriptor, and writing a security descriptor is not
+// implemented here yet. Accepting the field and ignoring it is the worst
+// option available: Terraform would report an OU as protected that is not,
+// and the provider would fail the apply with "inconsistent result" — a message
+// that names neither the field nor the reason.
+func refuseProtected(op string, protected *bool) error {
+	if protected == nil || !*protected {
+		return nil
+	}
+	return &adcore.Error{
+		Kind: adcore.KindUnsupported, Op: op,
+		Err: errors.New("protected_from_accidental_deletion requires writing a security " +
+			"descriptor, which this backend does not yet implement; set it to false on the " +
+			"ldap connection, or use one of the PowerShell connections"),
+	}
+}
+
 func (o *ouDirectory) Create(ctx context.Context, spec adcore.OUSpec) (*adcore.OU, error) {
 	const op = "OU.Create"
+	if err := refuseProtected(op, spec.Protected); err != nil {
+		return nil, err
+	}
 	if err := adcore.ValidateName(op, spec.Name); err != nil {
 		return nil, err
 	}
@@ -112,6 +136,9 @@ func (o *ouDirectory) Search(ctx context.Context, q adcore.Query) ([]adcore.OU, 
 // unprotect-before-move step, because there is only one operation.
 func (o *ouDirectory) Update(ctx context.Context, id adcore.Identity, spec adcore.OUSpec) (*adcore.OU, error) {
 	const op = "OU.Update"
+	if err := refuseProtected(op, spec.Protected); err != nil {
+		return nil, err
+	}
 	if err := adcore.ValidateName(op, spec.Name); err != nil {
 		return nil, err
 	}
