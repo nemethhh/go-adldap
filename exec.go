@@ -14,6 +14,12 @@ type core struct {
 	server string
 	dnc    string
 
+	// schemaNC and configNC are the other two naming contexts Schema.Resolve
+	// searches. Like dnc they are read once at New and are constant for the
+	// client's lifetime under a pinned DC.
+	schemaNC string
+	configNC string
+
 	// dialOther opens a short-lived connection to a DC other than the pinned
 	// one, for the replication wait. The pool cannot serve it: every pooled
 	// connection is bound to Server for the client's lifetime, which is the

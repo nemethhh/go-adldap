@@ -25,10 +25,11 @@ func (s *Server) handleBind(w *gldap.ResponseWriter, r *gldap.Request) {
 // reads defaultNamingContext from here to pin the domain.
 func (s *Server) rootDSE() map[string][][]byte {
 	return map[string][][]byte{
-		"defaultNamingContext": {[]byte(DNC)},
-		"dnsHostName":          {[]byte("dc01.corp.local")},
-		"schemaNamingContext":  {[]byte("CN=Schema,CN=Configuration," + DNC)},
-		"supportedLDAPVersion": {[]byte("3")},
+		"defaultNamingContext":       {[]byte(DNC)},
+		"dnsHostName":                {[]byte("dc01.corp.local")},
+		"schemaNamingContext":        {[]byte("CN=Schema,CN=Configuration," + DNC)},
+		"configurationNamingContext": {[]byte("CN=Configuration," + DNC)},
+		"supportedLDAPVersion":       {[]byte("3")},
 	}
 }
 

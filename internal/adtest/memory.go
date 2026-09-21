@@ -123,9 +123,10 @@ func (c *memConn) Search(ctx context.Context, req conn.SearchRequest) (*conn.Sea
 		return &conn.SearchResult{Entries: []conn.Entry{{
 			DN: "",
 			Attrs: map[string][][]byte{
-				"defaultNamingContext": {[]byte(DNC)},
-				"dnsHostName":          {[]byte("dc01.corp.local")},
-				"schemaNamingContext":  {[]byte("CN=Schema,CN=Configuration," + DNC)},
+				"defaultNamingContext":       {[]byte(DNC)},
+				"dnsHostName":                {[]byte("dc01.corp.local")},
+				"schemaNamingContext":        {[]byte("CN=Schema,CN=Configuration," + DNC)},
+				"configurationNamingContext": {[]byte("CN=Configuration," + DNC)},
 			},
 		}}}, nil
 	}
