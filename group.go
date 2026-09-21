@@ -81,7 +81,7 @@ func (g *groupDirectory) Create(ctx context.Context, spec adcore.GroupSpec) (*ad
 	if err := g.c.withConn(ctx, op, func(cn conn.Conn) error {
 		return cn.Add(ctx, dn, add)
 	}); err != nil {
-		return nil, err
+		return nil, g.c.annotateAlreadyExists(ctx, err, deletedFilter("group", spec.Name, spec.Container))
 	}
 
 	created, err := g.Get(ctx, adcore.ByDN(dn))

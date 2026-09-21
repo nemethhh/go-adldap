@@ -126,9 +126,17 @@ func (c *memConn) Search(ctx context.Context, req conn.SearchRequest) (*conn.Sea
 		}}}, nil
 	}
 
+	showDeleted := hasControl(req.Controls, adldap.ControlShowDeleted)
+
 	var out []conn.Entry
 	for dn, attrs := range c.m.entries {
 		if !inScopeMem(dn, req.BaseDN, req.Scope) {
+			continue
+		}
+		// A tombstone is invisible without the show-deleted control, exactly
+		// as a DC hides it. Returning them unconditionally would let the
+		// tombstone probe pass while never sending the control.
+		if isTombstone(attrs) && !showDeleted {
 			continue
 		}
 		if !matchFilter(req.Filter, attrs) {
@@ -324,4 +332,18 @@ func (c *memConn) Delete(ctx context.Context, dn string) error {
 	}
 	delete(c.m.entries, key)
 	return nil
+}
+
+func hasControl(controls []conn.Control, oid string) bool {
+	for _, c := range controls {
+		if c.OID == oid {
+			return true
+		}
+	}
+	return false
+}
+
+func isTombstone(attrs map[string][][]byte) bool {
+	vals, ok := lookupFold(attrs, "isDeleted")
+	return ok && len(vals) > 0 && strings.EqualFold(string(vals[0]), "TRUE")
 }

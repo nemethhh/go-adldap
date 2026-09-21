@@ -170,7 +170,7 @@ func (u *userDirectory) Create(ctx context.Context, spec adcore.UserSpec) (*adco
 	if err := u.c.withConn(ctx, op, func(cn conn.Conn) error {
 		return cn.Add(ctx, dn, add)
 	}); err != nil {
-		return nil, err
+		return nil, u.c.annotateAlreadyExists(ctx, err, deletedFilter("user", name, spec.Container))
 	}
 
 	if spec.Password != nil && !spec.Password.IsZero() {

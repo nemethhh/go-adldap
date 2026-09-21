@@ -49,6 +49,8 @@ func (s *Server) handleSearch(w *gldap.ResponseWriter, r *gldap.Request) {
 		return
 	}
 
+	showDeleted := hasGldapControl(m.Controls, showDeletedOID)
+
 	s.mu.Lock()
 	type hit struct {
 		dn    string
@@ -57,6 +59,9 @@ func (s *Server) handleSearch(w *gldap.ResponseWriter, r *gldap.Request) {
 	var hits []hit
 	for dn, attrs := range s.entries {
 		if !inScope(dn, m.BaseDN, m.Scope) {
+			continue
+		}
+		if isTombstone(attrs) && !showDeleted {
 			continue
 		}
 		if !matchFilter(m.Filter, attrs) {
@@ -188,11 +193,47 @@ func matchFilter(filter string, attrs map[string][][]byte) bool {
 	}
 	unescaped := unescapeFilterValue(want)
 	for _, v := range vals {
-		if strings.EqualFold(string(v), unescaped) {
+		if matchValue(string(v), unescaped) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchValue compares one attribute value against an assertion, honouring the
+// substring form. The tombstone probe searches for "name=Gone*", because a
+// deleted object's name is mangled to "Gone\0ADEL:<guid>" — without wildcard
+// support that probe matches nothing and every already-exists looks live.
+func matchValue(have, want string) bool {
+	if !strings.Contains(want, "*") {
+		return strings.EqualFold(have, want)
+	}
+	parts := strings.Split(strings.ToLower(want), "*")
+	h := strings.ToLower(have)
+	if pre := parts[0]; pre != "" {
+		if !strings.HasPrefix(h, pre) {
+			return false
+		}
+		h = h[len(pre):]
+	}
+	last := parts[len(parts)-1]
+	if last != "" {
+		if !strings.HasSuffix(h, last) {
+			return false
+		}
+		h = h[:len(h)-len(last)]
+	}
+	for _, mid := range parts[1 : len(parts)-1] {
+		if mid == "" {
+			continue
+		}
+		i := strings.Index(h, mid)
+		if i < 0 {
+			return false
+		}
+		h = h[i+len(mid):]
+	}
+	return true
 }
 
 // unescapeFilterValue reverses RFC 4515 escaping. Every assertion value this
@@ -394,4 +435,17 @@ func (s *Server) handleDelete(w *gldap.ResponseWriter, r *gldap.Request) {
 	resp = r.NewResponse(gldap.WithApplicationCode(gldap.ApplicationDelResponse),
 		gldap.WithResponseCode(gldap.ResultNoSuchObject),
 		gldap.WithDiagnosticMessage("0000208D: NameErr: DSID-03100238, problem 2001 (NO_OBJECT), data 0"))
+}
+
+// showDeletedOID is repeated rather than imported from adldap: importing the
+// parent package from a package it imports would be a cycle.
+const showDeletedOID = "1.2.840.113556.1.4.417"
+
+func hasGldapControl(controls []gldap.Control, oid string) bool {
+	for _, c := range controls {
+		if c.GetControlType() == oid {
+			return true
+		}
+	}
+	return false
 }

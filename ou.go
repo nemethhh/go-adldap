@@ -62,7 +62,7 @@ func (o *ouDirectory) Create(ctx context.Context, spec adcore.OUSpec) (*adcore.O
 	if err := o.c.withConn(ctx, op, func(cn conn.Conn) error {
 		return cn.Add(ctx, dn, add)
 	}); err != nil {
-		return nil, err
+		return nil, o.c.annotateAlreadyExists(ctx, err, deletedFilter("organizationalUnit", spec.Name, spec.Container))
 	}
 
 	// Read back through the same path Get uses, so an inconsistent result
