@@ -3,6 +3,8 @@ package adtest
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,9 +24,10 @@ import (
 // the conformance suite are exercised for real; what this does not cover is
 // the adapter and the socket, which Start does.
 type MemServer struct {
-	mu      sync.Mutex
-	entries map[string]map[string][][]byte
-	seq     uint32
+	mu         sync.Mutex
+	entries    map[string]map[string][][]byte
+	seq        uint32
+	rangeLimit int
 }
 
 // StartMemory returns an empty in-memory directory holding only the naming
@@ -41,6 +44,18 @@ func StartMemory(t *testing.T) *MemServer {
 		"objectSid": {DomainSID},
 	})
 	return m
+}
+
+// RangeLimit makes the server behave like a domain controller's MaxValRange:
+// a multi-valued attribute is returned in pages, and the attribute name in the
+// result carries the range the page covers. Without this the harness hands
+// back every value at once and no ranged-retrieval bug can be reproduced in
+// CI — which is exactly the shape of bug that only a real group with more than
+// 1500 members would otherwise find.
+func (m *MemServer) RangeLimit(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rangeLimit = n
 }
 
 // Seed inserts an entry directly.
@@ -147,7 +162,7 @@ func (c *memConn) Search(ctx context.Context, req conn.SearchRequest) (*conn.Sea
 		if !matchFilter(req.Filter, attrs) {
 			continue
 		}
-		out = append(out, conn.Entry{DN: dn, Attrs: project(attrs, req.Attributes)})
+		out = append(out, conn.Entry{DN: dn, Attrs: rangePages(project(attrs, req.Attributes), req.Attributes, c.m.rangeLimit)})
 	}
 	if len(out) == 0 && req.Scope == conn.ScopeBase && !c.existsLocked(req.BaseDN) {
 		return nil, raw(32, diagNoObject)
@@ -186,11 +201,67 @@ func project(attrs map[string][][]byte, want []string) map[string][][]byte {
 			continue
 		}
 		for _, w := range want {
-			if w == "*" || strings.EqualFold(w, k) {
+			// A requested "member;range=0-*" asks for the "member" attribute;
+			// the range is an option on the description, not part of the name.
+			if w == "*" || strings.EqualFold(baseAttr(w), k) {
 				out[k] = v
 				break
 			}
 		}
+	}
+	return out
+}
+
+// baseAttr strips any options from an attribute description, so
+// "member;range=1500-*" selects "member".
+func baseAttr(desc string) string {
+	if i := strings.Index(desc, ";"); i >= 0 {
+		return desc[:i]
+	}
+	return desc
+}
+
+// rangePages re-keys a requested attribute as a page of values, the way a
+// domain controller does once a value count passes MaxValRange.
+//
+// AD answers "member;range=0-*" with "member;range=0-1499" while values
+// remain and with "member;range=<lo>-*" on the last page — the "*" in the
+// RESPONSE is the terminator, and it is deliberately emitted here even when
+// the final page is exactly full, because that is the case a client counting
+// values against the limit gets wrong.
+func rangePages(attrs map[string][][]byte, want []string, limit int) map[string][][]byte {
+	if limit <= 0 {
+		return attrs
+	}
+	out := make(map[string][][]byte, len(attrs))
+	for k, v := range attrs {
+		out[k] = v
+	}
+	for _, w := range want {
+		base := baseAttr(w)
+		vals, ok := attrs[base]
+		if !ok || len(vals) <= limit {
+			continue
+		}
+		lo := 0
+		if i := strings.Index(strings.ToLower(w), ";range="); i >= 0 {
+			spec := w[i+len(";range="):]
+			if j := strings.Index(spec, "-"); j >= 0 {
+				if n, err := strconv.Atoi(spec[:j]); err == nil {
+					lo = n
+				}
+			}
+		}
+		if lo > len(vals) {
+			lo = len(vals)
+		}
+		hi := lo + limit
+		delete(out, base)
+		if hi >= len(vals) {
+			out[fmt.Sprintf("%s;range=%d-*", base, lo)] = vals[lo:]
+			continue
+		}
+		out[fmt.Sprintf("%s;range=%d-%d", base, lo, hi-1)] = vals[lo:hi]
 	}
 	return out
 }
