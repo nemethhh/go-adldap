@@ -165,3 +165,119 @@ func FlagsFor(inh adcore.Inheritance) byte {
 		return 0
 	}
 }
+
+// EncodeACE renders one entry. The type is chosen by whether a GUID is
+// present, because AD requires the object form for an entry carrying one and
+// refuses an object ACE that carries neither.
+func EncodeACE(a DecodedACE) []byte {
+	object := len(a.ObjectType) == 16 || len(a.InheritedObjectType) == 16
+
+	var t byte
+	switch {
+	case object && a.Deny:
+		t = aceTypeDeniedObject
+	case object:
+		t = aceTypeAllowedObject
+	case a.Deny:
+		t = aceTypeAccessDenied
+	default:
+		t = aceTypeAccessAllowed
+	}
+
+	body := binary.LittleEndian.AppendUint32(nil, a.Mask)
+	if object {
+		var objFlags uint32
+		if len(a.ObjectType) == 16 {
+			objFlags |= aceObjectTypePresent
+		}
+		if len(a.InheritedObjectType) == 16 {
+			objFlags |= aceInheritedObjectTypePresent
+		}
+		body = binary.LittleEndian.AppendUint32(body, objFlags)
+		if len(a.ObjectType) == 16 {
+			body = append(body, a.ObjectType...)
+		}
+		if len(a.InheritedObjectType) == 16 {
+			body = append(body, a.InheritedObjectType...)
+		}
+	}
+	body = append(body, a.TrusteeSID...)
+
+	size := aceHeaderLen + len(body)
+	out := []byte{t, a.Flags}
+	out = binary.LittleEndian.AppendUint16(out, uint16(size))
+	return append(out, body...)
+}
+
+// aclRevisionFor is 4 once any entry is an object ACE. A DACL left at
+// revision 2 with an object ACE in it is a descriptor the directory rejects,
+// and the refusal names the attribute rather than the revision.
+func aclRevisionFor(list [][]byte) byte {
+	for _, ace := range list {
+		if ace[0] == aceTypeAllowedObject || ace[0] == aceTypeDeniedObject {
+			return aclRevisionDS
+		}
+	}
+	return 2
+}
+
+// AddACEs appends entries to a descriptor's DACL, leaving every existing
+// entry — modelled or not — exactly where it was.
+//
+// It reports changed=false for an empty add, so the caller can skip a write
+// that would generate replication for nothing.
+func AddACEs(sd []byte, add []DecodedACE) ([]byte, bool, error) {
+	if len(add) == 0 {
+		return sd, false, nil
+	}
+	p, err := parse(sd)
+	if err != nil {
+		return nil, false, err
+	}
+	list, err := aces(p.dacl)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, a := range add {
+		list = append(list, EncodeACE(a))
+	}
+	p.dacl = buildACL(aclRevisionFor(list), list)
+	p.control |= controlDACLPresent
+	return p.serialize(), true, nil
+}
+
+// RemoveACEs drops every entry that decodes, is not inherited, and matches.
+//
+// An inherited entry is never a candidate: it is a system-stamped copy of a
+// parent's ACE, removing it locally means nothing, and AD puts it back. An
+// entry this package cannot decode is never a candidate either, because match
+// was never shown it.
+func RemoveACEs(sd []byte, match func(DecodedACE) bool) ([]byte, bool, error) {
+	p, err := parse(sd)
+	if err != nil {
+		return nil, false, err
+	}
+	list, err := aces(p.dacl)
+	if err != nil {
+		return nil, false, err
+	}
+	kept := make([][]byte, 0, len(list))
+	changed := false
+	for _, ace := range list {
+		d, ok, err := decodeACE(ace)
+		if err != nil {
+			return nil, false, err
+		}
+		if ok && !d.Inherited && match(d) {
+			changed = true
+			continue
+		}
+		kept = append(kept, ace)
+	}
+	if !changed {
+		return sd, false, nil
+	}
+	p.dacl = buildACL(aclRevisionFor(kept), kept)
+	p.control |= controlDACLPresent
+	return p.serialize(), true, nil
+}

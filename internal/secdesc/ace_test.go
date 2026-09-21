@@ -173,3 +173,130 @@ func TestDecodeACEsEmptyDescriptor(t *testing.T) {
 		t.Errorf("got %d ACEs, want 0", len(got))
 	}
 }
+
+func TestEncodeACERoundTripsThroughDecode(t *testing.T) {
+	trustee := sidWithRID(domainSID, 1200)
+	in := []DecodedACE{
+		{TrusteeSID: trustee, Mask: 0x00000010},
+		{TrusteeSID: trustee, Deny: true, Mask: 0x00000020, Flags: AceFlagContainerInherit | AceFlagInheritOnly},
+		{TrusteeSID: trustee, Mask: RightControlAccess, ObjectType: testGUID,
+			Flags: AceFlagContainerInherit | AceFlagInheritOnly},
+		{TrusteeSID: trustee, Mask: 0x00000030, ObjectType: testGUID, InheritedObjectType: testGUID2},
+	}
+	for i, want := range in {
+		got, ok, err := decodeACE(EncodeACE(want))
+		if err != nil {
+			t.Fatalf("case %d: decode: %v", i, err)
+		}
+		if !ok {
+			t.Fatalf("case %d: the encoded ACE did not decode", i)
+		}
+		if got.Deny != want.Deny || got.Mask != want.Mask || got.Flags != want.Flags {
+			t.Errorf("case %d: got %+v, want %+v", i, got, want)
+		}
+		if !bytes.Equal(got.TrusteeSID, want.TrusteeSID) {
+			t.Errorf("case %d: trustee did not round trip", i)
+		}
+		if !bytes.Equal(got.ObjectType, want.ObjectType) {
+			t.Errorf("case %d: ObjectType %x, want %x", i, got.ObjectType, want.ObjectType)
+		}
+		if !bytes.Equal(got.InheritedObjectType, want.InheritedObjectType) {
+			t.Errorf("case %d: InheritedObjectType %x, want %x", i, got.InheritedObjectType, want.InheritedObjectType)
+		}
+	}
+}
+
+func TestAddACEsKeepsWhatIsThere(t *testing.T) {
+	existing := sidWithRID(domainSID, 1300)
+	added := sidWithRID(domainSID, 1301)
+	callback := rawAllowACE(0x00, 0x00000010, existing)
+	callback[0] = 0x09 // an ACE type this package does not model
+
+	sd := buildTestSD(t, [][]byte{rawAllowACE(0x00, 0x00000010, existing), callback})
+
+	out, changed, err := AddACEs(sd, []DecodedACE{{TrusteeSID: added, Mask: 0x00000020}})
+	if err != nil {
+		t.Fatalf("AddACEs: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false after adding an ACE")
+	}
+
+	p, err := parse(out)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	list, err := aces(p.dacl)
+	if err != nil {
+		t.Fatalf("aces: %v", err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("the DACL holds %d ACEs, want 3 — the unmodelled one must survive", len(list))
+	}
+	if list[1][0] != 0x09 {
+		t.Error("the callback ACE was not carried through byte for byte")
+	}
+}
+
+// An object ACE forces the DACL to revision 4. At revision 2 the directory
+// rejects the whole descriptor, with a message about the attribute rather
+// than about the revision.
+func TestAddACEsRaisesTheACLRevisionForAnObjectACE(t *testing.T) {
+	sd := buildTestSD(t, nil)
+	out, _, err := AddACEs(sd, []DecodedACE{
+		{TrusteeSID: sidWithRID(domainSID, 1400), Mask: RightControlAccess, ObjectType: testGUID},
+	})
+	if err != nil {
+		t.Fatalf("AddACEs: %v", err)
+	}
+	p, err := parse(out)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if p.dacl[0] != aclRevisionDS {
+		t.Errorf("ACL revision = %d, want %d once an object ACE is present", p.dacl[0], aclRevisionDS)
+	}
+}
+
+func TestRemoveACEsNeverTouchesAnInheritedOne(t *testing.T) {
+	trustee := sidWithRID(domainSID, 1500)
+	sd := buildTestSD(t, [][]byte{
+		rawAllowACE(AceFlagInherited, 0x00000010, trustee),
+		rawAllowACE(0x00, 0x00000010, trustee),
+	})
+
+	out, changed, err := RemoveACEs(sd, func(a DecodedACE) bool {
+		return bytes.Equal(a.TrusteeSID, trustee) && a.Mask == 0x00000010
+	})
+	if err != nil {
+		t.Fatalf("RemoveACEs: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false; the explicit ACE should have gone")
+	}
+
+	got, err := DecodeACEs(out)
+	if err != nil {
+		t.Fatalf("DecodeACEs: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("%d ACEs remain, want 1", len(got))
+	}
+	if !got[0].Inherited {
+		t.Error("the surviving ACE is the explicit one; the inherited one was removed")
+	}
+}
+
+func TestRemoveACEsReportsNoChangeWhenNothingMatches(t *testing.T) {
+	sd := buildTestSD(t, [][]byte{rawAllowACE(0x00, 0x00000010, sidWithRID(domainSID, 1600))})
+	out, changed, err := RemoveACEs(sd, func(DecodedACE) bool { return false })
+	if err != nil {
+		t.Fatalf("RemoveACEs: %v", err)
+	}
+	if changed {
+		t.Error("changed = true with no matching ACE; the caller would write for nothing and replicate it")
+	}
+	if !bytes.Equal(out, sd) {
+		t.Error("the descriptor was rewritten although nothing matched")
+	}
+}
