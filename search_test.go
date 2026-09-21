@@ -70,3 +70,32 @@ func TestSearchOverTheWire(t *testing.T) {
 		t.Fatalf("Search returned %+v", got)
 	}
 }
+
+// resolveDN looks an object up without naming its class. The any-class term
+// must be the unescaped presence filter: Equal would escape it to
+// (objectClass=\2a), a literal match on an asterisk, and every membership edit
+// and password set — which all resolve a DN first — would report not-found.
+func TestAnyClassLookupResolvesAcrossClasses(t *testing.T) {
+	ctx := context.Background()
+	d := newTestDirectory(t)
+
+	g, err := d.Group.Create(ctx, adcore.GroupSpec{
+		Name: "Holder", SamAccountName: "Holder", Container: d.DNC,
+		Scope: adcore.GroupScopeGlobal, Category: adcore.GroupCategorySecurity,
+	})
+	if err != nil {
+		t.Fatalf("Create group: %v", err)
+	}
+	u, err := d.User.Create(ctx, adcore.UserSpec{
+		Name: adcore.String("member"), SamAccountName: "member", Container: d.DNC,
+	})
+	if err != nil {
+		t.Fatalf("Create user: %v", err)
+	}
+
+	// AddMembers resolves the member's DN without knowing its class.
+	if err := d.Group.AddMembers(ctx, adcore.ByGUID(g.GUID),
+		[]adcore.Identity{adcore.ByGUID(u.GUID)}); err != nil {
+		t.Fatalf("AddMembers had to resolve a DN by GUID alone: %v", err)
+	}
+}

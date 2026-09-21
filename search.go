@@ -39,7 +39,7 @@ func scopeOf(s adcore.SearchScope) conn.Scope {
 func (c *core) searchEntries(ctx context.Context, op string, q adcore.Query, objectClass string, want []string) ([]conn.Entry, error) {
 	q = q.WithDefaults(c.dnc)
 
-	filter := adcore.Equal("objectClass", objectClass)
+	filter := classTerm(objectClass)
 	if q.Filter != "" {
 		filter = adcore.And(filter, q.Filter)
 	}
@@ -105,6 +105,19 @@ func identityFilter(id adcore.Identity) (string, error) {
 	}
 }
 
+// classTerm builds the objectClass half of an identity lookup.
+//
+// "*" means any class and must stay the unescaped presence filter
+// (objectClass=*). Running it through Equal escapes it to (objectClass=\2a),
+// a literal match on an asterisk, which matches nothing — so every lookup that
+// does not name a class silently returns not-found.
+func classTerm(objectClass string) string {
+	if objectClass == "*" {
+		return "(objectClass=*)"
+	}
+	return adcore.Equal("objectClass", objectClass)
+}
+
 // escapeBinary renders bytes as the \xx form an LDAP filter requires.
 func escapeBinary(b []byte) string {
 	out := make([]byte, 0, len(b)*3)
@@ -123,7 +136,7 @@ func (c *core) getOne(ctx context.Context, op string, id adcore.Identity, object
 	if err != nil {
 		return conn.Entry{}, &adcore.Error{Kind: adcore.KindConstraint, Op: op, Identity: id.String(), Err: err}
 	}
-	filter := adcore.And(adcore.Equal("objectClass", objectClass), f)
+	filter := adcore.And(classTerm(objectClass), f)
 
 	var entries []conn.Entry
 	err = c.withConn(ctx, op, func(cn conn.Conn) error {
