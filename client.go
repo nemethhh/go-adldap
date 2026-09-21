@@ -208,7 +208,7 @@ func (c *Client) Directory() adcore.Directory {
 		Group:          &groupDirectory{c: c.core},
 		User:           &userDirectory{c: c.core},
 		ServiceAccount: unsupportedServiceAccount{},
-		Computer:       unsupportedComputer{},
+		Computer:       &computerDirectory{c: c.core},
 		ACL:            unsupportedACL{},
 		Schema:         unsupportedSchema{},
 		Server:         c.core.server,
