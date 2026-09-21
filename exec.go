@@ -13,10 +13,17 @@ type core struct {
 	pool   *conn.Pool
 	server string
 	dnc    string
-	retry  adcore.RetryConfig
-	repl   ReplicationConfig
-	locks  *adcore.KeyedMutex
-	log    Logger
+
+	// dialOther opens a short-lived connection to a DC other than the pinned
+	// one, for the replication wait. The pool cannot serve it: every pooled
+	// connection is bound to Server for the client's lifetime, which is the
+	// invariant that keeps a write and its read-back on one DC.
+	dialOther func(ctx context.Context, host string) (conn.Conn, error)
+
+	retry adcore.RetryConfig
+	repl  ReplicationConfig
+	locks *adcore.KeyedMutex
+	log   Logger
 }
 
 // withConn runs one operation on a pooled connection, classifies its failure,
@@ -67,6 +74,3 @@ func (c *core) debug(ctx context.Context, msg string, kv ...any) {
 
 // isNotFound reports whether err is the not-found condition.
 func isNotFound(err error) bool { return err != nil && errors.Is(err, adcore.ErrNotFound) }
-
-// replicate performs the post-write wait. Task 30 implements it.
-func (c *core) replicate(ctx context.Context, guid string) error { return nil }

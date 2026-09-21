@@ -31,7 +31,11 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newClient(ctx, cfg, dial, binder)
+	other, err := cfg.otherDialer(binder)
+	if err != nil {
+		return nil, err
+	}
+	return newClient(ctx, cfg, dial, binder, other)
 }
 
 // NewWithConn builds a Client over a caller-supplied connection factory rather
@@ -47,7 +51,9 @@ func NewWithConn(ctx context.Context, cfg Config, dial func(context.Context) (co
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return newClient(ctx, cfg, dial, noBinder{})
+	return newClient(ctx, cfg, dial, noBinder{}, func(ctx context.Context, _ string) (conn.Conn, error) {
+		return dial(ctx)
+	})
 }
 
 // noBinder satisfies the Binder contract for a connection that is already
@@ -94,7 +100,7 @@ func (cfg Config) dialer() (func(context.Context) (conn.Conn, error), conn.Binde
 }
 
 // newClient opens the pool, reads the rootDSE and pins the DC.
-func newClient(ctx context.Context, cfg Config, dial func(context.Context) (conn.Conn, error), binder conn.Binder) (*Client, error) {
+func newClient(ctx context.Context, cfg Config, dial func(context.Context) (conn.Conn, error), binder conn.Binder, dialOther func(context.Context, string) (conn.Conn, error)) (*Client, error) {
 	pool := conn.NewPool(conn.PoolOptions{
 		Dial:   dial,
 		Binder: binder,
@@ -102,12 +108,13 @@ func newClient(ctx context.Context, cfg Config, dial func(context.Context) (conn
 	})
 
 	c := &core{
-		pool:   pool,
-		server: cfg.Server,
-		retry:  cfg.Retry.WithDefaults(),
-		repl:   cfg.Replication,
-		locks:  adcore.NewKeyedMutex(),
-		log:    cfg.Log,
+		pool:      pool,
+		dialOther: dialOther,
+		server:    cfg.Server,
+		retry:     cfg.Retry.WithDefaults(),
+		repl:      cfg.Replication,
+		locks:     adcore.NewKeyedMutex(),
+		log:       cfg.Log,
 	}
 
 	var dnc string
@@ -195,4 +202,47 @@ func (c *Client) Directory() adcore.Directory {
 		DNC:    c.core.dnc,
 		Closer: c,
 	}
+}
+
+// otherDialer dials a DC other than the pinned one, with the same TLS
+// configuration, port and bind. It is used only by the replication wait, which
+// has to observe a write arriving somewhere the pool never goes.
+func (cfg Config) otherDialer(binder conn.Binder) (func(context.Context, string) (conn.Conn, error), error) {
+	port := cfg.Port
+	if port == 0 {
+		port = DefaultPort(cfg.TLS)
+	}
+	timeout := cfg.Timeout
+	if timeout == 0 {
+		timeout = defaultTimeout
+	}
+	return func(ctx context.Context, host string) (conn.Conn, error) {
+		// The certificate is verified against the host actually being
+		// reached, not against the pinned one, or every target beyond the
+		// first would fail the name check.
+		tlsCfg := cfg.TLSConfig
+		if tlsCfg == nil {
+			var err error
+			tlsCfg, err = conn.BuildTLSConfig(host, cfg.CACertificateFile, cfg.InsecureSkipVerify)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			clone := tlsCfg.Clone()
+			clone.ServerName = host
+			tlsCfg = clone
+		}
+		cn, err := conn.Dial(ctx, conn.DialOptions{
+			Host: host, Port: port, StartTLS: cfg.TLS == TLSStartTLS,
+			TLSConfig: tlsCfg, Timeout: timeout,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := binder.Bind(ctx, cn); err != nil {
+			cn.Close()
+			return nil, err
+		}
+		return cn, nil
+	}, nil
 }
