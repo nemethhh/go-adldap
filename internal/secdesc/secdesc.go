@@ -274,3 +274,159 @@ func SetProtected(sd []byte, on bool) (out []byte, ok bool, err error) {
 	p.control |= controlDACLPresent
 	return p.serialize(), true, nil
 }
+
+// --- object ACEs -----------------------------------------------------------
+//
+// An extended right is denied with an ACCESS_DENIED_OBJECT_ACE, which carries
+// the right's schema GUID after the mask:
+//
+//	AceType(1) AceFlags(1) AceSize(2) Mask(4) Flags(4)
+//	[ObjectType(16)] [InheritedObjectType(16)] Sid(...)
+//
+// The two GUIDs are present only when their bit is set in Flags, so the SID's
+// offset is not fixed — which is why this is parsed rather than indexed.
+
+const (
+	aceTypeDeniedObject = 0x06
+
+	aceObjectTypePresent          = 0x00000001
+	aceInheritedObjectTypePresent = 0x00000002
+
+	// RightControlAccess is ADS_RIGHT_DS_CONTROL_ACCESS, the mask an extended
+	// right is granted or denied with.
+	RightControlAccess = 0x00000100
+
+	// aclRevisionDS is required once a DACL contains an object ACE. Leaving an
+	// ACL at revision 2 with an object ACE in it produces a descriptor the
+	// directory rejects.
+	aclRevisionDS = 4
+)
+
+// SIDEveryone is S-1-1-0 and SIDSelf is S-1-5-10, the two trustees AD denies
+// when an account may not change its own password.
+var (
+	SIDEveryone = everyone
+	SIDSelf     = []byte{1, 1, 0, 0, 0, 0, 0, 5, 10, 0, 0, 0}
+)
+
+// deniedObject reports whether an ACE denies mask on objectType to trustee.
+func deniedObject(ace []byte, mask uint32, objectType, trustee []byte) bool {
+	if len(ace) < aceHeaderLen+8 || ace[0] != aceTypeDeniedObject {
+		return false
+	}
+	if binary.LittleEndian.Uint32(ace[4:8])&mask == 0 {
+		return false
+	}
+	flags := binary.LittleEndian.Uint32(ace[8:12])
+	off := 12
+	if flags&aceObjectTypePresent != 0 {
+		if len(ace) < off+16 {
+			return false
+		}
+		if string(ace[off:off+16]) != string(objectType) {
+			return false
+		}
+		off += 16
+	} else {
+		// No object type means the ACE covers every extended right, which
+		// includes this one.
+		if len(objectType) > 0 {
+			return false
+		}
+	}
+	if flags&aceInheritedObjectTypePresent != 0 {
+		off += 16
+	}
+	return len(ace) >= off+len(trustee) && string(ace[off:off+len(trustee)]) == string(trustee)
+}
+
+func deniedObjectACE(mask uint32, objectType, trustee []byte) []byte {
+	ace := make([]byte, aceHeaderLen+4+4+len(objectType)+len(trustee))
+	ace[0] = aceTypeDeniedObject
+	ace[1] = 0 // this object only
+	binary.LittleEndian.PutUint16(ace[2:4], uint16(len(ace)))
+	binary.LittleEndian.PutUint32(ace[4:8], mask)
+	binary.LittleEndian.PutUint32(ace[8:12], aceObjectTypePresent)
+	copy(ace[12:], objectType)
+	copy(ace[12+len(objectType):], trustee)
+	return ace
+}
+
+// HasDeniedObjectRight reports whether any of the trustees is denied mask on
+// objectType.
+//
+// Any, not all: if Everyone is denied the right then the account cannot use it
+// whatever the other entries say, so treating that as "still allowed" would
+// report a state the directory does not have.
+func HasDeniedObjectRight(sd []byte, mask uint32, objectType []byte, trustees ...[]byte) (bool, error) {
+	p, err := parse(sd)
+	if err != nil {
+		return false, err
+	}
+	list, err := aces(p.dacl)
+	if err != nil {
+		return false, err
+	}
+	for _, a := range list {
+		for _, t := range trustees {
+			if deniedObject(a, mask, objectType, t) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// SetDeniedObjectRight adds or removes a Deny of mask on objectType for each
+// trustee. It is idempotent and reports whether anything changed.
+func SetDeniedObjectRight(sd []byte, on bool, mask uint32, objectType []byte, trustees ...[]byte) (out []byte, ok bool, err error) {
+	p, err := parse(sd)
+	if err != nil {
+		return nil, false, err
+	}
+	list, err := aces(p.dacl)
+	if err != nil {
+		return nil, false, err
+	}
+
+	kept := make([][]byte, 0, len(list)+len(trustees))
+	removed := 0
+	for _, a := range list {
+		match := false
+		for _, t := range trustees {
+			if deniedObject(a, mask, objectType, t) {
+				match = true
+				break
+			}
+		}
+		if match {
+			removed++
+			continue
+		}
+		kept = append(kept, a)
+	}
+
+	if !on {
+		if removed == 0 {
+			return sd, false, nil
+		}
+	} else {
+		if removed == len(trustees) && removed > 0 {
+			return sd, false, nil // already exactly what was asked for
+		}
+		// Deny entries lead: a DACL is evaluated in order.
+		add := make([][]byte, 0, len(trustees))
+		for _, t := range trustees {
+			add = append(add, deniedObjectACE(mask, objectType, t))
+		}
+		kept = append(add, kept...)
+	}
+
+	revision := byte(aclRevisionDS)
+	if len(p.dacl) > 0 && p.dacl[0] > aclRevisionDS {
+		revision = p.dacl[0]
+	}
+	p.dacl = buildACL(revision, kept)
+	p.control |= controlDACLPresent
+	return p.serialize(), true, nil
+}

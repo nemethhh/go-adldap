@@ -9,13 +9,31 @@ import (
 	"github.com/nemethhh/go-adcore"
 	"github.com/nemethhh/go-adldap/internal/attrs"
 	"github.com/nemethhh/go-adldap/internal/conn"
+	"github.com/nemethhh/go-adldap/internal/secdesc"
 )
 
 var userAttrs = []string{
 	"objectGUID", "distinguishedName", "name", "sAMAccountName",
 	"userPrincipalName", "displayName", "givenName", "sn", "description",
 	"userAccountControl", "objectSid", "pwdLastSet", "accountExpires",
+	"nTSecurityDescriptor",
 }
+
+// changePasswordRight is the User-Change-Password extended right. Denying it
+// to both Everyone and SELF is what CannotChangePassword means: denying only
+// SELF leaves the account able to change its password through a trustee that
+// Everyone still covers.
+var changePasswordRight = mustGUID("ab721a53-1e2f-11d0-9819-00aa0040529b")
+
+func mustGUID(s string) []byte {
+	b, err := attrs.GUIDToBytes(s)
+	if err != nil {
+		panic("adldap: bad built-in GUID " + s + ": " + err.Error())
+	}
+	return b
+}
+
+var changePasswordTrustees = [][]byte{secdesc.SIDEveryone, secdesc.SIDSelf}
 
 type userDirectory struct{ c *core }
 
@@ -55,6 +73,19 @@ func (u *userDirectory) model(e conn.Entry) (*adcore.User, error) {
 		return nil, err
 	}
 
+	// An unreadable descriptor reports the AD default rather than failing the
+	// whole read: the rest of the model is still accurate. Writing it does
+	// fail loudly — see setCanChangePassword.
+	canChange := true
+	if sd := e.First("nTSecurityDescriptor"); len(sd) > 0 {
+		denied, err := secdesc.HasDeniedObjectRight(sd, secdesc.RightControlAccess,
+			changePasswordRight, changePasswordTrustees...)
+		if err != nil {
+			return nil, err
+		}
+		canChange = !denied
+	}
+
 	return &adcore.User{
 		GUID: guid, DN: e.DN, Name: e.FirstString("name"),
 		SamAccountName:    e.FirstString("sAMAccountName"),
@@ -71,26 +102,61 @@ func (u *userDirectory) model(e conn.Entry) (*adcore.User, error) {
 		// logon. It is an interval attribute, not a timestamp, so it is only
 		// ever compared against zero here.
 		ChangePasswordAtLogon: e.FirstString("pwdLastSet") == "0",
-		// CanChangePassword is an ACE pair; Phase 5 reads it. True is the AD
-		// default for a new account.
-		CanChangePassword: true,
-		AccountExpiration: expires,
-		SID:               mustSID(e),
+		CanChangePassword:     canChange,
+		AccountExpiration:     expires,
+		SID:                   mustSID(e),
 	}, nil
 }
 
-// refuseUnimplemented rejects the spec fields backed by a security descriptor,
-// which this backend cannot write yet. Silently ignoring them would leave
-// Terraform reporting a state it never achieved.
-func refuseUnimplemented(op string, spec adcore.UserSpec) error {
-	if spec.CanChangePassword != nil && !*spec.CanChangePassword {
+// setCanChangePassword writes, or lifts, the Deny of the change-password
+// extended right.
+//
+// It is a read-modify-write of nTSecurityDescriptor for the same reason OU
+// protection is: the descriptor holds every delegation on the account, so a
+// value built from scratch would discard them. The write is skipped when the
+// account already has the requested state, because a no-op replace still
+// generates replication.
+func (u *userDirectory) setCanChangePassword(ctx context.Context, op, dn string, can bool) error {
+	var current []byte
+	if err := u.c.withConn(ctx, op, func(cn conn.Conn) error {
+		res, err := cn.Search(ctx, conn.SearchRequest{
+			BaseDN: dn, Scope: conn.ScopeBase, Filter: "(objectClass=*)",
+			Attributes: []string{"nTSecurityDescriptor"}, SizeLimit: 1,
+			Controls: []conn.Control{sdDACL()},
+		})
+		if err != nil {
+			return err
+		}
+		if len(res.Entries) == 0 {
+			return fmt.Errorf("the account disappeared while setting can_change_password")
+		}
+		current = res.Entries[0].First("nTSecurityDescriptor")
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(current) == 0 {
 		return &adcore.Error{
-			Kind: adcore.KindUnsupported, Op: op,
-			Err: errors.New("can_change_password requires writing a security descriptor, " +
-				"which this backend does not yet implement"),
+			Kind: adcore.KindDenied, Op: op, Target: dn,
+			Err: errors.New("the directory returned no nTSecurityDescriptor; the account " +
+				"cannot read the object's security descriptor, so can_change_password " +
+				"cannot be managed"),
 		}
 	}
-	return nil
+
+	updated, changed, err := secdesc.SetDeniedObjectRight(current, !can,
+		secdesc.RightControlAccess, changePasswordRight, changePasswordTrustees...)
+	if err != nil {
+		return &adcore.Error{Kind: adcore.KindTransport, Op: op, Target: dn, Err: err}
+	}
+	if !changed {
+		return nil
+	}
+	return u.c.withConn(ctx, op, func(cn conn.Conn) error {
+		return cn.Modify(ctx, dn, []conn.Modification{{
+			Op: conn.ModReplace, Type: "nTSecurityDescriptor", Vals: [][]byte{updated},
+		}}, sdDACL())
+	})
 }
 
 // applyUAC sets or clears only the bits the spec names and leaves the rest of
@@ -118,9 +184,6 @@ func applyUAC(current uint32, spec adcore.UserSpec) uint32 {
 
 func (u *userDirectory) Create(ctx context.Context, spec adcore.UserSpec) (*adcore.User, error) {
 	const op = "User.Create"
-	if err := refuseUnimplemented(op, spec); err != nil {
-		return nil, err
-	}
 	if err := spec.Validate(op); err != nil {
 		return nil, err
 	}
@@ -205,6 +268,12 @@ func (u *userDirectory) Create(ctx context.Context, spec adcore.UserSpec) (*adco
 		}
 	}
 
+	if spec.CanChangePassword != nil && !*spec.CanChangePassword {
+		if err := u.setCanChangePassword(ctx, op, dn, false); err != nil {
+			return nil, err
+		}
+	}
+
 	created, err := u.Get(ctx, adcore.ByDN(dn))
 	if err != nil {
 		return nil, err
@@ -213,7 +282,7 @@ func (u *userDirectory) Create(ctx context.Context, spec adcore.UserSpec) (*adco
 }
 
 func (u *userDirectory) Get(ctx context.Context, id adcore.Identity) (*adcore.User, error) {
-	e, err := u.c.getOne(ctx, "User.Get", id, "user", userAttrs)
+	e, err := u.c.getOne(ctx, "User.Get", id, "user", userAttrs, sdDACL())
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +295,7 @@ func (u *userDirectory) Get(ctx context.Context, id adcore.Identity) (*adcore.Us
 
 func (u *userDirectory) Search(ctx context.Context, q adcore.Query) ([]adcore.User, error) {
 	const op = "User.Search"
-	entries, err := u.c.searchEntries(ctx, op, q, "user", userAttrs)
+	entries, err := u.c.searchEntries(ctx, op, q, "user", userAttrs, sdDACL())
 	if err != nil {
 		return nil, err
 	}
@@ -243,9 +312,6 @@ func (u *userDirectory) Search(ctx context.Context, q adcore.Query) ([]adcore.Us
 
 func (u *userDirectory) Update(ctx context.Context, id adcore.Identity, spec adcore.UserSpec) (*adcore.User, error) {
 	const op = "User.Update"
-	if err := refuseUnimplemented(op, spec); err != nil {
-		return nil, err
-	}
 	if err := spec.Validate(op); err != nil {
 		return nil, err
 	}
@@ -345,6 +411,14 @@ func (u *userDirectory) Update(ctx context.Context, id adcore.Identity, spec adc
 	updated, err := u.Get(ctx, adcore.ByGUID(current.GUID))
 	if err != nil {
 		return nil, err
+	}
+	if spec.CanChangePassword != nil && *spec.CanChangePassword != updated.CanChangePassword {
+		if err := u.setCanChangePassword(ctx, op, updated.DN, *spec.CanChangePassword); err != nil {
+			return nil, adcore.WithIdentity(err, op, id)
+		}
+		if updated, err = u.Get(ctx, adcore.ByGUID(current.GUID)); err != nil {
+			return nil, err
+		}
 	}
 	return updated, u.c.replicate(ctx, updated.GUID)
 }

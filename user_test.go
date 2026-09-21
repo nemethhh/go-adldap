@@ -192,19 +192,74 @@ func TestSetPasswordRefusesEmpty(t *testing.T) {
 	}
 }
 
-// can_change_password is an ACE pair, which Phase 5 implements. Until then a
-// spec that asks for it must say so rather than quietly ignore the request.
-func TestCannotChangePasswordIsUnsupportedForNow(t *testing.T) {
+// can_change_password is a Deny of the change-password extended right to both
+// Everyone and SELF. It defaults to true, the AD default for a new account.
+func TestCanChangePasswordRoundTrips(t *testing.T) {
 	ctx := context.Background()
 	d := newTestDirectory(t)
 
-	_, err := d.User.Create(ctx, adcore.UserSpec{
+	def, err := d.User.Create(ctx, adcore.UserSpec{
+		Name: adcore.String("plainpw"), SamAccountName: "plainpw", Container: d.DNC,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !def.CanChangePassword {
+		t.Error("a new account should report CanChangePassword true")
+	}
+
+	denied, err := d.User.Create(ctx, adcore.UserSpec{
 		Name: adcore.String("acl"), SamAccountName: "acl", Container: d.DNC,
 		CanChangePassword: adcore.Bool(false),
 	})
-	var e *adcore.Error
-	if !errors.As(err, &e) || e.Kind != adcore.KindUnsupported {
-		t.Fatalf("want KindUnsupported, got %#v", err)
+	if err != nil {
+		t.Fatalf("Create with CanChangePassword=false: %v", err)
+	}
+	if denied.CanChangePassword {
+		t.Error("CanChangePassword=false was not applied")
+	}
+
+	back, err := d.User.Update(ctx, adcore.ByGUID(denied.GUID), adcore.UserSpec{
+		Name: adcore.String("acl"), SamAccountName: "acl", Container: d.DNC,
+		CanChangePassword: adcore.Bool(true),
+	})
+	if err != nil {
+		t.Fatalf("Update restoring CanChangePassword: %v", err)
+	}
+	if !back.CanChangePassword {
+		t.Error("the Deny was not lifted")
+	}
+}
+
+// The two descriptor-backed properties are written to the same attribute, so
+// setting one must not disturb the other.
+func TestCanChangePasswordAndProtectionCoexist(t *testing.T) {
+	ctx := context.Background()
+	d := newTestDirectory(t)
+
+	ou, err := d.OU.Create(ctx, adcore.OUSpec{
+		Name: "Both", Container: d.DNC, Protected: adcore.Bool(true),
+	})
+	if err != nil {
+		t.Fatalf("Create OU: %v", err)
+	}
+	u, err := d.User.Create(ctx, adcore.UserSpec{
+		Name: adcore.String("both"), SamAccountName: "both", Container: ou.DN,
+		CanChangePassword: adcore.Bool(false),
+	})
+	if err != nil {
+		t.Fatalf("Create user: %v", err)
+	}
+	if u.CanChangePassword {
+		t.Error("CanChangePassword=false was not applied")
+	}
+
+	stillProtected, err := d.OU.Get(ctx, adcore.ByGUID(ou.GUID))
+	if err != nil {
+		t.Fatalf("Get OU: %v", err)
+	}
+	if !stillProtected.Protected {
+		t.Error("writing a user descriptor disturbed the OU's protection")
 	}
 }
 
