@@ -115,6 +115,14 @@ const (
 	UACAccountDisable     uint32 = 0x0002
 	UACNormalAccount      uint32 = 0x0200
 	UACDontExpirePassword uint32 = 0x10000
+	// UACWorkstationTrustAccount is what a computer or gMSA account carries
+	// where a user carries UACNormalAccount. Creating a computer with
+	// UACNormalAccount produces an object AD will not authenticate.
+	UACWorkstationTrustAccount uint32 = 0x1000
+	// UACTrustedForDelegation is unconstrained delegation. It is a bit on the
+	// account, not a separate attribute, which is why TrustedForDelegation
+	// reads and writes through userAccountControl on both classes.
+	UACTrustedForDelegation uint32 = 0x80000
 )
 
 // groupType bits, per MS-ADTS 2.2.12. These are uint32 constants: AD stores
