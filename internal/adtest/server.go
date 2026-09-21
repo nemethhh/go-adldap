@@ -9,8 +9,10 @@
 package adtest
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"net"
 	"strconv"
 	"strings"
@@ -48,6 +50,15 @@ type Server struct {
 
 	mu      sync.Mutex
 	entries map[string]map[string][][]byte
+	seq     uint32
+}
+
+// nextGUID hands out a distinct objectGUID, the way a DC stamps one on create.
+func (s *Server) nextGUID() []byte {
+	s.seq++
+	b := make([]byte, 16)
+	binary.LittleEndian.PutUint32(b[0:4], s.seq)
+	return b
 }
 
 // Start brings up an LDAPS listener on a loopback port with a self-signed
@@ -216,4 +227,18 @@ func isChildOf(dn, base string) bool {
 	}
 	rest := normalizeDN(dn)[:len(normalizeDN(dn))-len(normalizeDN(base))-1]
 	return !strings.Contains(rest, ",")
+}
+
+// StartWire brings up the gldap-backed server and returns a Directory over it.
+// It covers the go-ldap adapter and the socket; StartMemory covers the
+// operations gldap cannot serve.
+func StartWire(t *testing.T) adcore.Directory {
+	t.Helper()
+	srv := Start(t)
+	client, err := adldap.New(context.Background(), srv.Config())
+	if err != nil {
+		t.Fatalf("adldap.New against the wire harness: %v", err)
+	}
+	t.Cleanup(func() { client.Close() })
+	return client.Directory()
 }

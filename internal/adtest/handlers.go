@@ -186,12 +186,51 @@ func matchFilter(filter string, attrs map[string][][]byte) bool {
 	if want == "*" {
 		return len(vals) > 0
 	}
+	unescaped := unescapeFilterValue(want)
 	for _, v := range vals {
-		if strings.EqualFold(string(v), want) {
+		if strings.EqualFold(string(v), unescaped) {
 			return true
 		}
 	}
 	return false
+}
+
+// unescapeFilterValue reverses RFC 4515 escaping. Every assertion value this
+// module emits is escaped — a binary objectGUID becomes \01\00..., and a DN
+// containing a backslash becomes \5c — so a matcher comparing against the
+// escaped text matches nothing at all.
+func unescapeFilterValue(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+2 >= len(s) {
+			out = append(out, s[i])
+			continue
+		}
+		hi, ok1 := unhex(s[i+1])
+		lo, ok2 := unhex(s[i+2])
+		if !ok1 || !ok2 {
+			out = append(out, s[i])
+			continue
+		}
+		out = append(out, hi<<4|lo)
+		i += 2
+	}
+	return string(out)
+}
+
+func unhex(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
 }
 
 func lookupFold(attrs map[string][][]byte, name string) ([][]byte, bool) {
@@ -246,7 +285,7 @@ func (s *Server) handleAdd(w *gldap.ResponseWriter, r *gldap.Request) {
 		return
 	}
 
-	attrs := make(map[string][][]byte, len(m.Attributes))
+	attrs := make(map[string][][]byte, len(m.Attributes)+3)
 	for _, a := range m.Attributes {
 		vals := make([][]byte, 0, len(a.Vals))
 		for _, v := range a.Vals {
@@ -254,7 +293,10 @@ func (s *Server) handleAdd(w *gldap.ResponseWriter, r *gldap.Request) {
 		}
 		attrs[a.Type] = vals
 	}
+	// A DC stamps these; a client never sends them.
+	attrs["objectGUID"] = [][]byte{s.nextGUID()}
 	attrs["distinguishedName"] = [][]byte{[]byte(m.DN)}
+	attrs["name"] = [][]byte{[]byte(rdnValue(m.DN))}
 	s.Seed(m.DN, attrs)
 
 	resp = r.NewResponse(gldap.WithApplicationCode(gldap.ApplicationAddResponse),

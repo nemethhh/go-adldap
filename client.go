@@ -27,7 +27,38 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	dial, binder, err := cfg.dialer()
+	if err != nil {
+		return nil, err
+	}
+	return newClient(ctx, cfg, dial, binder)
+}
 
+// NewWithConn builds a Client over a caller-supplied connection factory rather
+// than dialling one.
+//
+// It exists because the in-process LDAP server this module tests against
+// cannot serve ModifyDN — the library behind it parses no such request — and
+// ModifyDN is how a rename and a move happen. Without a seam here, the
+// rename-and-move contract could be tested only against a real domain. The
+// factory's type names an internal package, so nothing outside this module can
+// supply one.
+func NewWithConn(ctx context.Context, cfg Config, dial func(context.Context) (conn.Conn, error)) (*Client, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return newClient(ctx, cfg, dial, noBinder{})
+}
+
+// noBinder satisfies the Binder contract for a connection that is already
+// authenticated by construction.
+type noBinder struct{}
+
+func (noBinder) Bind(context.Context, conn.Conn) error { return nil }
+func (noBinder) Describe() string                      { return "pre-bound connection" }
+
+// dialer builds the real TLS dialler and the configured Binder.
+func (cfg Config) dialer() (func(context.Context) (conn.Conn, error), conn.Binder, error) {
 	port := cfg.Port
 	if port == 0 {
 		port = DefaultPort(cfg.TLS)
@@ -42,25 +73,30 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		var err error
 		tlsCfg, err = conn.BuildTLSConfig(cfg.Server, cfg.CACertificateFile, cfg.InsecureSkipVerify)
 		if err != nil {
-			return nil, &adcore.Error{Kind: adcore.KindConstraint, Op: "New", Err: err}
+			return nil, nil, &adcore.Error{Kind: adcore.KindConstraint, Op: "New", Err: err}
 		}
 	}
 
 	binder, err := cfg.binder()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	return func(ctx context.Context) (conn.Conn, error) {
+		return conn.Dial(ctx, conn.DialOptions{
+			Host:      cfg.Server,
+			Port:      port,
+			StartTLS:  cfg.TLS == TLSStartTLS,
+			TLSConfig: tlsCfg,
+			Timeout:   timeout,
+		})
+	}, binder, nil
+}
+
+// newClient opens the pool, reads the rootDSE and pins the DC.
+func newClient(ctx context.Context, cfg Config, dial func(context.Context) (conn.Conn, error), binder conn.Binder) (*Client, error) {
 	pool := conn.NewPool(conn.PoolOptions{
-		Dial: func(ctx context.Context) (conn.Conn, error) {
-			return conn.Dial(ctx, conn.DialOptions{
-				Host:      cfg.Server,
-				Port:      port,
-				StartTLS:  cfg.TLS == TLSStartTLS,
-				TLSConfig: tlsCfg,
-				Timeout:   timeout,
-			})
-		},
+		Dial:   dial,
 		Binder: binder,
 		Size:   cfg.MaxConcurrency,
 	})
@@ -75,7 +111,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	var dnc string
-	err = c.withConn(ctx, "New", func(cn conn.Conn) error {
+	err := c.withConn(ctx, "New", func(cn conn.Conn) error {
 		res, err := cn.Search(ctx, conn.SearchRequest{
 			BaseDN:     "",
 			Scope:      conn.ScopeBase,
@@ -146,13 +182,13 @@ func (c *Client) Close() error { return c.core.pool.Close() }
 
 // Directory presents this client through the backend-neutral contract.
 //
-// The per-class sub-directories are nil until Phase 2 lands them: a nil
-// interface field is an honest "not implemented yet" that fails loudly at the
-// first call, where a stub that returned an error would be dead code nobody
-// noticed shipping. Server, DNC and Close are live now, which is what the
-// connection layer's own tests need.
+// The sub-directories Phase 2 has not landed yet stay nil: a nil interface
+// field is an honest "not implemented yet" that fails loudly at the first
+// call, where a stub that returned an error would be dead code nobody noticed
+// shipping.
 func (c *Client) Directory() adcore.Directory {
 	return adcore.Directory{
+		OU:     &ouDirectory{c: c.core},
 		Server: c.core.server,
 		DNC:    c.core.dnc,
 		Closer: c,

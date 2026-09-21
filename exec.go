@@ -64,3 +64,9 @@ func (c *core) debug(ctx context.Context, msg string, kv ...any) {
 	}
 	c.log.Debug(ctx, msg, kv...)
 }
+
+// isNotFound reports whether err is the not-found condition.
+func isNotFound(err error) bool { return err != nil && errors.Is(err, adcore.ErrNotFound) }
+
+// replicate performs the post-write wait. Task 30 implements it.
+func (c *core) replicate(ctx context.Context, guid string) error { return nil }
