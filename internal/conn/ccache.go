@@ -20,15 +20,22 @@ var knownCCacheTypes = []string{"FILE", "DIR", "KEYRING", "KCM", "MEMORY", "MSLS
 // defaults on sssd-managed RHEL, Fedora and Ubuntu, so this is the failure an
 // operator who did everything right will hit first. The error names the fix.
 func ResolveCCachePath(explicit string, getenv func(string) string) (string, error) {
-	if explicit != "" {
-		return explicit, nil
+	raw := strings.TrimSpace(explicit)
+	if raw == "" {
+		raw = strings.TrimSpace(getenv("KRB5CCNAME"))
 	}
-	raw := strings.TrimSpace(getenv("KRB5CCNAME"))
 	if raw == "" {
 		return "", errors.New(
 			"adldap: no Kerberos credential cache: set KRB5CCNAME, or run " +
 				`KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit <user>@<REALM>`)
 	}
+	// An explicit path goes through exactly the same normalization as the
+	// environment's. A caller may legitimately write "FILE:/tmp/krb5cc" in
+	// configuration, and a consumer that resolves KRB5CCNAME itself — which
+	// the Terraform provider does, because configuration wins over the
+	// environment there — hands the raw value in through this argument. An
+	// explicit branch that returned it verbatim left the FILE: prefix in the
+	// filename and failed with "open FILE:/tmp/krb5cc_tf: no such file".
 	i := strings.Index(raw, ":")
 	if i <= 0 {
 		return raw, nil

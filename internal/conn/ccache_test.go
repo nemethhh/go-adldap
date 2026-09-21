@@ -29,6 +29,32 @@ func TestResolveCCachePathAcceptsBarePath(t *testing.T) {
 	}
 }
 
+// An explicit path is normalized exactly like the environment's. A consumer
+// that resolves KRB5CCNAME itself — the Terraform provider does, since
+// configuration wins over the environment there — passes the raw value in
+// here, and returning it verbatim left the prefix in the filename.
+func TestExplicitPathIsNormalizedToo(t *testing.T) {
+	got, err := ResolveCCachePath("FILE:/tmp/krb5cc_tf", env(nil))
+	if err != nil {
+		t.Fatalf("ResolveCCachePath: %v", err)
+	}
+	if got != "/tmp/krb5cc_tf" {
+		t.Errorf("got %q, want the FILE: prefix stripped from an explicit path too", got)
+	}
+}
+
+// And an explicit path naming an unreadable cache type must name the fix,
+// rather than being handed to os.ReadFile as a filename.
+func TestExplicitUnreadableTypeIsRefused(t *testing.T) {
+	_, err := ResolveCCachePath("KEYRING:persistent:1000", env(nil))
+	if err == nil {
+		t.Fatal("an explicit KEYRING cache must be an error")
+	}
+	if !strings.Contains(err.Error(), "KRB5CCNAME=FILE:") {
+		t.Errorf("error does not name the fix: %v", err)
+	}
+}
+
 func TestExplicitPathWinsOverEnvironment(t *testing.T) {
 	got, err := ResolveCCachePath("/explicit/cc", env(map[string]string{"KRB5CCNAME": "FILE:/tmp/other"}))
 	if err != nil {
