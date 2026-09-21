@@ -33,9 +33,14 @@ const (
 	rightAccessSystemSecurity uint32 = 0x01000000
 )
 
-// rightsTable is ordered by bit value so RightsNames produces a stable list.
-// GenericAll is deliberately absent: it is a composite handled separately,
-// and including it here would match on every one of its constituent bits.
+// rightsTable is every ActiveDirectoryRights name with the mask it sets,
+// ordered by value ASCENDING. Both composites and single bits are in it,
+// because .NET's [Flags] formatting does not distinguish them: it matches the
+// largest value it can and works down, which is what makes a mask holding all
+// of GENERIC_READ's bits render as "GenericRead" rather than as its four
+// constituents. Emitting the constituents is a permanent diff for anyone
+// switching backends, and was found that way — see LAB.md, the differential
+// suite.
 var rightsTable = []struct {
 	bit  uint32
 	name adcore.Right
@@ -51,19 +56,14 @@ var rightsTable = []struct {
 	{RightControlAccess, "ExtendedRight"},
 	{rightDelete, "Delete"},
 	{rightReadControl, "ReadControl"},
+	{rightGenericExecute, "GenericExecute"},
+	{rightGenericWrite, "GenericWrite"},
+	{rightGenericRead, "GenericRead"},
 	{rightWriteDacl, "WriteDacl"},
 	{rightWriteOwner, "WriteOwner"},
+	{rightGenericAll, "GenericAll"},
 	{rightSynchronize, "Synchronize"},
 	{rightAccessSystemSecurity, "AccessSystemSecurity"},
-}
-
-// composites are the names that set more than one bit. They are resolved on
-// the way in and, for GenericAll alone, on the way out.
-var composites = map[string]uint32{
-	"genericall":     rightGenericAll,
-	"genericexecute": rightGenericExecute,
-	"genericwrite":   rightGenericWrite,
-	"genericread":    rightGenericRead,
 }
 
 // RightsMask folds right names into the access mask an ACE carries.
@@ -76,10 +76,6 @@ func RightsMask(names []adcore.Right) (uint32, error) {
 	var mask uint32
 	for _, n := range names {
 		key := strings.ToLower(strings.TrimSpace(string(n)))
-		if v, ok := composites[key]; ok {
-			mask |= v
-			continue
-		}
 		found := false
 		for _, r := range rightsTable {
 			if strings.ToLower(string(r.name)) == key {
@@ -95,19 +91,29 @@ func RightsMask(names []adcore.Right) (uint32, error) {
 	return mask, nil
 }
 
-// RightsNames is the inverse, in bit order so two reads of one ACE always
-// produce the same list and Terraform sees no diff.
+// RightsNames is the inverse, rendered exactly as .NET renders
+// ActiveDirectoryRights: walk the names by value descending, take each whose
+// bits are all still present, clear them, then emit what was taken in
+// ascending order.
 //
-// A mask carrying every GenericAll bit is emitted as GenericAll alone: that
-// is what AD's own tooling shows and what go-adpwsh emits, and expanding it
-// into nine names would be a permanent diff for anyone switching backends.
+// That is what collapses 0x000F01FF to "GenericAll" and 0x00020094 to
+// "GenericRead" instead of to their constituent bits. The PowerShell backend
+// gets these names from .NET itself, so any other rendering here is a
+// permanent diff for a user switching backends — which is how the four-name
+// spelling of GenericRead was found.
 func RightsNames(mask uint32) []adcore.Right {
-	if mask&rightGenericAll == rightGenericAll {
-		return []adcore.Right{"GenericAll"}
+	taken := make([]bool, len(rightsTable))
+	remaining := mask
+	for i := len(rightsTable) - 1; i >= 0; i-- {
+		r := rightsTable[i]
+		if r.bit != 0 && remaining&r.bit == r.bit {
+			taken[i] = true
+			remaining &^= r.bit
+		}
 	}
 	var out []adcore.Right
-	for _, r := range rightsTable {
-		if mask&r.bit == r.bit && r.bit != 0 {
+	for i, r := range rightsTable {
+		if taken[i] {
 			out = append(out, r.name)
 		}
 	}

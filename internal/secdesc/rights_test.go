@@ -96,3 +96,44 @@ func TestRightsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// The PowerShell backend gets these names from .NET's ActiveDirectoryRights,
+// which renders a mask holding all of a composite's bits as the composite's
+// name. Emitting the constituents instead is a permanent diff for anyone
+// switching backends, and the lab's differential suite found exactly that on
+// every inherited ACE carrying GENERIC_READ.
+func TestRightsNamesCollapseTheDotNetComposites(t *testing.T) {
+	cases := []struct {
+		name string
+		in   uint32
+		want []adcore.Right
+	}{
+		{"generic read alone", 0x00020094, []adcore.Right{"GenericRead"}},
+		{"generic write alone", 0x00020028, []adcore.Right{"GenericWrite"}},
+		{"generic execute alone", 0x00020004, []adcore.Right{"GenericExecute"}},
+		// BUILTIN\Administrators on a fresh OU. Every name and the order are
+		// what the PowerShell backend reported for the identical mask.
+		{"builtin administrators", 0x000F01BD, []adcore.Right{
+			"CreateChild", "Self", "WriteProperty", "ExtendedRight",
+			"Delete", "GenericRead", "WriteDacl", "WriteOwner",
+		}},
+		// ReadControl on its own is not GenericRead: the composite is only
+		// emitted when every one of its bits is present.
+		{"read control alone", 0x00020000, []adcore.Right{"ReadControl"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := secdesc.RightsNames(tc.in)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("RightsNames(%#x) = %v, want %v", tc.in, got, tc.want)
+			}
+			back, err := secdesc.RightsMask(got)
+			if err != nil {
+				t.Fatalf("RightsMask(%v): %v", got, err)
+			}
+			if back != tc.in {
+				t.Errorf("%v round-tripped to %#x, want %#x", got, back, tc.in)
+			}
+		})
+	}
+}
