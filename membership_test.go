@@ -144,3 +144,46 @@ func TestEditMembersWithNoMembersIsANoOp(t *testing.T) {
 		t.Errorf("AddMembers(nil) = %v, want nil", err)
 	}
 }
+
+// The matching rule walks whichever attribute it is applied to, so the
+// attribute is the whole question: "member:...:=X" finds the groups that
+// contain X, while "memberOf:...:=G" finds the accounts in G. Getting it
+// backwards returns an empty membership rather than an error, which on the lab
+// showed up as a data source reporting zero members for a group that had one.
+func TestMembersRecursiveAsksTheRightAttribute(t *testing.T) {
+	ctx := context.Background()
+	srv := adtest.StartMemory(t)
+	d := srv.Directory(t)
+
+	g, err := d.Group.Create(ctx, adcore.GroupSpec{
+		Name: "Outer", SamAccountName: "Outer", Container: d.DNC,
+		Scope: adcore.GroupScopeGlobal, Category: adcore.GroupCategorySecurity,
+	})
+	if err != nil {
+		t.Fatalf("Create group: %v", err)
+	}
+	u, err := d.User.Create(ctx, adcore.UserSpec{
+		Name: adcore.String("nested"), SamAccountName: "nested", Container: d.DNC,
+	})
+	if err != nil {
+		t.Fatalf("Create user: %v", err)
+	}
+
+	// The in-memory directory does not maintain memberOf, so seed it the way a
+	// real directory would once the member is added.
+	if err := d.Group.AddMembers(ctx, adcore.ByGUID(g.GUID),
+		[]adcore.Identity{adcore.ByGUID(u.GUID)}); err != nil {
+		t.Fatalf("AddMembers: %v", err)
+	}
+	entry := srv.Entries()["CN=nested,"+d.DNC]
+	entry["memberOf"] = [][]byte{[]byte("CN=Outer," + d.DNC)}
+	srv.Seed("CN=nested,"+d.DNC, entry)
+
+	got, err := d.Group.MembersRecursive(ctx, adcore.ByGUID(g.GUID))
+	if err != nil {
+		t.Fatalf("MembersRecursive: %v", err)
+	}
+	if len(got) != 1 || got[0].GUID != u.GUID {
+		t.Fatalf("MembersRecursive = %+v, want the one nested account", got)
+	}
+}

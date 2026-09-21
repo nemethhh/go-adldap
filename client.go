@@ -189,18 +189,23 @@ func (c *Client) Close() error { return c.core.pool.Close() }
 
 // Directory presents this client through the backend-neutral contract.
 //
-// The sub-directories Phase 2 has not landed yet stay nil: a nil interface
-// field is an honest "not implemented yet" that fails loudly at the first
-// call, where a stub that returned an error would be dead code nobody noticed
-// shipping.
+// The classes this backend does not implement are filled with stubs that
+// return KindUnsupported, naming the class. They were nil interface fields
+// until the lab showed what that actually costs: a consumer dereferences the
+// nil and panics, which aborted an entire acceptance run and named neither the
+// class nor the reason.
 func (c *Client) Directory() adcore.Directory {
 	return adcore.Directory{
-		OU:     &ouDirectory{c: c.core},
-		Group:  &groupDirectory{c: c.core},
-		User:   &userDirectory{c: c.core},
-		Server: c.core.server,
-		DNC:    c.core.dnc,
-		Closer: c,
+		OU:             &ouDirectory{c: c.core},
+		Group:          &groupDirectory{c: c.core},
+		User:           &userDirectory{c: c.core},
+		ServiceAccount: unsupportedServiceAccount{},
+		Computer:       unsupportedComputer{},
+		ACL:            unsupportedACL{},
+		Schema:         unsupportedSchema{},
+		Server:         c.core.server,
+		DNC:            c.core.dnc,
+		Closer:         c,
 	}
 }
 

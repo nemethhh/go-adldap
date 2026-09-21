@@ -8,12 +8,19 @@ import (
 	"github.com/nemethhh/go-adcore"
 	"github.com/nemethhh/go-adldap/internal/attrs"
 	"github.com/nemethhh/go-adldap/internal/conn"
+	"github.com/nemethhh/go-adldap/internal/secdesc"
 )
 
 // ouAttrs is the projection an OU read requests: only what is in scope, never
 // "*". Asking for everything pulls back attributes the model does not carry
 // and makes a read's cost unbounded.
-var ouAttrs = []string{"objectGUID", "distinguishedName", "name", "description"}
+var ouAttrs = []string{"objectGUID", "distinguishedName", "name", "description", "nTSecurityDescriptor"}
+
+// sdDACL scopes every read and write of nTSecurityDescriptor to the DACL.
+// Without it a read also asks for the SACL, which needs a privilege the
+// service account does not have, and a write would replace the owner with
+// nothing.
+func sdDACL() conn.Control { return conn.SDFlagsControl(conn.SDFlagDACL) }
 
 type ouDirectory struct{ c *core }
 
@@ -33,40 +40,79 @@ func (o *ouDirectory) model(e conn.Entry) (*adcore.OU, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A caller that could not read the descriptor sees Protected false rather
+	// than an error: the rest of the model is still accurate, and a read that
+	// fails wholesale over one unreadable attribute is worse than a narrow
+	// gap. Writing it does fail loudly — see setProtection.
+	protected := false
+	if sd := e.First("nTSecurityDescriptor"); len(sd) > 0 {
+		if protected, err = secdesc.IsProtected(sd); err != nil {
+			return nil, err
+		}
+	}
+
 	return &adcore.OU{
 		GUID:        guid,
 		DN:          e.DN,
 		Name:        e.FirstString("name"),
 		Container:   container,
 		Description: e.FirstString("description"),
+		Protected:   protected,
 	}, nil
 }
 
-// refuseProtected rejects the one OUSpec field this backend cannot honour.
+// setProtection writes the accidental-deletion Deny ACE, or lifts it.
 //
-// ProtectedFromAccidentalDeletion is a Deny ACE for Delete and DeleteTree on
-// the object's security descriptor, and writing a security descriptor is not
-// implemented here yet. Accepting the field and ignoring it is the worst
-// option available: Terraform would report an OU as protected that is not,
-// and the provider would fail the apply with "inconsistent result" — a message
-// that names neither the field nor the reason.
-func refuseProtected(op string, protected *bool) error {
-	if protected == nil || !*protected {
+// It is a read-modify-write of nTSecurityDescriptor rather than a blind
+// replace: the descriptor carries every delegation on the object, so writing
+// one built from scratch would discard them. secdesc treats entries it did not
+// write as opaque bytes for that reason.
+//
+// The write is skipped when the object is already in the requested state,
+// because a no-op replace of nTSecurityDescriptor still generates replication.
+func (o *ouDirectory) setProtection(ctx context.Context, op, dn string, want bool) error {
+	var current []byte
+	if err := o.c.withConn(ctx, op, func(cn conn.Conn) error {
+		res, err := cn.Search(ctx, conn.SearchRequest{
+			BaseDN: dn, Scope: conn.ScopeBase, Filter: "(objectClass=*)",
+			Attributes: []string{"nTSecurityDescriptor"}, SizeLimit: 1,
+			Controls: []conn.Control{sdDACL()},
+		})
+		if err != nil {
+			return err
+		}
+		if len(res.Entries) == 0 {
+			return fmt.Errorf("the object disappeared while setting protection")
+		}
+		current = res.Entries[0].First("nTSecurityDescriptor")
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(current) == 0 {
+		return &adcore.Error{
+			Kind: adcore.KindDenied, Op: op, Target: dn,
+			Err: errors.New("the directory returned no nTSecurityDescriptor; the account " +
+				"cannot read the object's security descriptor, so protection cannot be managed"),
+		}
+	}
+
+	updated, changed, err := secdesc.SetProtected(current, want)
+	if err != nil {
+		return &adcore.Error{Kind: adcore.KindTransport, Op: op, Target: dn, Err: err}
+	}
+	if !changed {
 		return nil
 	}
-	return &adcore.Error{
-		Kind: adcore.KindUnsupported, Op: op,
-		Err: errors.New("protected_from_accidental_deletion requires writing a security " +
-			"descriptor, which this backend does not yet implement; set it to false on the " +
-			"ldap connection, or use one of the PowerShell connections"),
-	}
+	return o.c.withConn(ctx, op, func(cn conn.Conn) error {
+		return cn.Modify(ctx, dn, []conn.Modification{{
+			Op: conn.ModReplace, Type: "nTSecurityDescriptor", Vals: [][]byte{updated},
+		}}, sdDACL())
+	})
 }
 
 func (o *ouDirectory) Create(ctx context.Context, spec adcore.OUSpec) (*adcore.OU, error) {
 	const op = "OU.Create"
-	if err := refuseProtected(op, spec.Protected); err != nil {
-		return nil, err
-	}
 	if err := adcore.ValidateName(op, spec.Name); err != nil {
 		return nil, err
 	}
@@ -89,6 +135,14 @@ func (o *ouDirectory) Create(ctx context.Context, spec adcore.OUSpec) (*adcore.O
 		return nil, o.c.annotateAlreadyExists(ctx, err, deletedFilter("organizationalUnit", spec.Name, spec.Container))
 	}
 
+	// Protection is a second operation: AD has no way to create an object with
+	// a Deny ACE already on it.
+	if spec.Protected != nil && *spec.Protected {
+		if err := o.setProtection(ctx, op, dn, true); err != nil {
+			return nil, err
+		}
+	}
+
 	// Read back through the same path Get uses, so an inconsistent result
 	// after apply is impossible by construction.
 	created, err := o.Get(ctx, adcore.ByDN(dn))
@@ -99,7 +153,7 @@ func (o *ouDirectory) Create(ctx context.Context, spec adcore.OUSpec) (*adcore.O
 }
 
 func (o *ouDirectory) Get(ctx context.Context, id adcore.Identity) (*adcore.OU, error) {
-	e, err := o.c.getOne(ctx, "OU.Get", id, "organizationalUnit", ouAttrs)
+	e, err := o.c.getOne(ctx, "OU.Get", id, "organizationalUnit", ouAttrs, sdDACL())
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +166,7 @@ func (o *ouDirectory) Get(ctx context.Context, id adcore.Identity) (*adcore.OU, 
 
 func (o *ouDirectory) Search(ctx context.Context, q adcore.Query) ([]adcore.OU, error) {
 	const op = "OU.Search"
-	entries, err := o.c.searchEntries(ctx, op, q, "organizationalUnit", ouAttrs)
+	entries, err := o.c.searchEntries(ctx, op, q, "organizationalUnit", ouAttrs, sdDACL())
 	if err != nil {
 		return nil, err
 	}
@@ -136,9 +190,6 @@ func (o *ouDirectory) Search(ctx context.Context, q adcore.Query) ([]adcore.OU, 
 // unprotect-before-move step, because there is only one operation.
 func (o *ouDirectory) Update(ctx context.Context, id adcore.Identity, spec adcore.OUSpec) (*adcore.OU, error) {
 	const op = "OU.Update"
-	if err := refuseProtected(op, spec.Protected); err != nil {
-		return nil, err
-	}
 	if err := adcore.ValidateName(op, spec.Name); err != nil {
 		return nil, err
 	}
@@ -173,11 +224,25 @@ func (o *ouDirectory) Update(ctx context.Context, id adcore.Identity, spec adcor
 		}
 	}
 
+	// Protection is lifted before a move and restored after. The Deny covers
+	// DeleteTree, which AD checks on a ModifyDN that changes the parent, so a
+	// protected OU cannot be moved while it is protected.
+	wantProtected := current.Protected
+	if spec.Protected != nil {
+		wantProtected = *spec.Protected
+	}
+
 	sameContainer, err := adcore.EqualFoldDN(spec.Container, current.Container)
 	if err != nil {
 		return nil, &adcore.Error{Kind: adcore.KindConstraint, Op: op, Err: err}
 	}
-	if spec.Name != current.Name || !sameContainer {
+	moving := spec.Name != current.Name || !sameContainer
+	if moving && current.Protected {
+		if err := o.setProtection(ctx, op, current.DN, false); err != nil {
+			return nil, adcore.WithIdentity(err, op, id)
+		}
+	}
+	if moving {
 		superior := ""
 		if !sameContainer {
 			superior = spec.Container
@@ -192,6 +257,14 @@ func (o *ouDirectory) Update(ctx context.Context, id adcore.Identity, spec adcor
 	updated, err := o.Get(ctx, adcore.ByGUID(current.GUID))
 	if err != nil {
 		return nil, err
+	}
+	if updated.Protected != wantProtected {
+		if err := o.setProtection(ctx, op, updated.DN, wantProtected); err != nil {
+			return nil, adcore.WithIdentity(err, op, id)
+		}
+		if updated, err = o.Get(ctx, adcore.ByGUID(current.GUID)); err != nil {
+			return nil, err
+		}
 	}
 	return updated, o.c.replicate(ctx, updated.GUID)
 }
@@ -213,6 +286,14 @@ func (o *ouDirectory) Delete(ctx context.Context, id adcore.Identity, opts adcor
 			return nil
 		}
 		return err
+	}
+
+	// Unprotect is explicit at the call site because it is the destructive
+	// half: without it, deleting an OU created with AD's own default fails.
+	if opts.Unprotect && current.Protected {
+		if err := o.setProtection(ctx, op, current.DN, false); err != nil {
+			return adcore.WithIdentity(err, op, id)
+		}
 	}
 
 	var children int

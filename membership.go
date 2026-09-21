@@ -53,7 +53,11 @@ func (g *groupDirectory) MembersRecursive(ctx context.Context, id adcore.Identit
 	if err != nil {
 		return nil, err
 	}
-	filter := "(&(|(objectClass=user)(objectClass=computer))(member:" +
+	// memberOf, not member. The matching rule walks whichever attribute it is
+	// applied to: "member:...:=X" finds the groups that contain X, which is the
+	// inverse of this question and returns nothing for a leaf account. The lab
+	// caught this as an empty recursive membership where one member existed.
+	filter := "(&(|(objectClass=user)(objectClass=computer))(memberOf:" +
 		MatchingRuleInChain + ":=" + adcore.EscapeFilter(target.DN) + "))"
 
 	var entries []conn.Entry

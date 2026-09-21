@@ -36,7 +36,7 @@ func scopeOf(s adcore.SearchScope) conn.Scope {
 // finding the extra one proves more exist and the caller errors rather than
 // returning a silently truncated set — the same contract the PowerShell
 // backend has.
-func (c *core) searchEntries(ctx context.Context, op string, q adcore.Query, objectClass string, want []string) ([]conn.Entry, error) {
+func (c *core) searchEntries(ctx context.Context, op string, q adcore.Query, objectClass string, want []string, controls ...conn.Control) ([]conn.Entry, error) {
 	q = q.WithDefaults(c.dnc)
 
 	filter := classTerm(objectClass)
@@ -52,6 +52,7 @@ func (c *core) searchEntries(ctx context.Context, op string, q adcore.Query, obj
 			Filter:     filter,
 			Attributes: want,
 			SizeLimit:  q.SizeLimit + 1,
+			Controls:   controls,
 		})
 		if err != nil {
 			return err
@@ -131,7 +132,7 @@ func escapeBinary(b []byte) string {
 // getOne reads exactly one object of a class by identity. A search returning
 // nothing is KindNotFound; returning more than one is KindConstraint, never a
 // silent first-match.
-func (c *core) getOne(ctx context.Context, op string, id adcore.Identity, objectClass string, want []string) (conn.Entry, error) {
+func (c *core) getOne(ctx context.Context, op string, id adcore.Identity, objectClass string, want []string, controls ...conn.Control) (conn.Entry, error) {
 	f, err := identityFilter(id)
 	if err != nil {
 		return conn.Entry{}, &adcore.Error{Kind: adcore.KindConstraint, Op: op, Identity: id.String(), Err: err}
@@ -146,6 +147,7 @@ func (c *core) getOne(ctx context.Context, op string, id adcore.Identity, object
 			Filter:     filter,
 			Attributes: want,
 			SizeLimit:  2,
+			Controls:   controls,
 		})
 		if err != nil {
 			return err

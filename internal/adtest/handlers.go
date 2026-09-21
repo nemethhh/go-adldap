@@ -179,6 +179,12 @@ func matchFilter(filter string, attrs map[string][][]byte) bool {
 		return false
 	}
 	body := filter[1 : len(filter)-1]
+	// An extensible match, "attr:<rule-oid>:=value". The harness treats the
+	// chain rule as a direct comparison, which is enough to tell the right
+	// attribute from the wrong one — the distinction the filter turns on.
+	if j := strings.Index(body, ":"); j > 0 && strings.Contains(body, ":=") {
+		body = body[:j] + body[strings.Index(body, ":=")+1:]
+	}
 	i := strings.Index(body, "=")
 	if i < 0 {
 		return false

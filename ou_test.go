@@ -221,27 +221,106 @@ func TestOUOverTheWire(t *testing.T) {
 	}
 }
 
-// Protection is a Deny ACE, which this backend cannot write yet. Accepting the
-// field and ignoring it would have Terraform report an OU as protected that is
-// not — and the apply would fail with "inconsistent result after apply", which
-// names neither the field nor the reason. This was a real defect found on the
-// lab, not a hypothetical.
-func TestOUProtectedIsRefusedRatherThanIgnored(t *testing.T) {
+// Protection is a Deny ACE on the object's security descriptor. The provider
+// defaults protected_from_accidental_deletion to true, so an OU create that
+// accepted the field and ignored it failed the apply with "inconsistent result
+// after apply" — which named neither the field nor the reason. Found on the
+// lab, where it blocked every non-skipped acceptance test.
+func TestOUProtectionRoundTrips(t *testing.T) {
 	ctx := context.Background()
 	d := newTestDirectory(t)
 
-	_, err := d.OU.Create(ctx, adcore.OUSpec{
+	on, err := d.OU.Create(ctx, adcore.OUSpec{
 		Name: "Guarded", Container: d.DNC, Protected: adcore.Bool(true),
 	})
-	var e *adcore.Error
-	if !errors.As(err, &e) || e.Kind != adcore.KindUnsupported {
-		t.Fatalf("want KindUnsupported, got %#v", err)
+	if err != nil {
+		t.Fatalf("Create protected: %v", err)
+	}
+	if !on.Protected {
+		t.Error("Create returned Protected=false for a protected OU")
+	}
+	got, err := d.OU.Get(ctx, adcore.ByGUID(on.GUID))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !got.Protected {
+		t.Error("Get returned Protected=false for a protected OU")
 	}
 
-	// false and unset are both fine: nothing is being asked for.
-	if _, err := d.OU.Create(ctx, adcore.OUSpec{
-		Name: "Open", Container: d.DNC, Protected: adcore.Bool(false),
-	}); err != nil {
-		t.Fatalf("Protected=false must be accepted: %v", err)
+	off, err := d.OU.Update(ctx, adcore.ByGUID(on.GUID), adcore.OUSpec{
+		Name: "Guarded", Container: d.DNC, Protected: adcore.Bool(false),
+	})
+	if err != nil {
+		t.Fatalf("Update lifting protection: %v", err)
+	}
+	if off.Protected {
+		t.Error("protection survived an update that cleared it")
+	}
+}
+
+func TestOUCreatedUnprotectedByDefault(t *testing.T) {
+	ctx := context.Background()
+	d := newTestDirectory(t)
+	ou, err := d.OU.Create(ctx, adcore.OUSpec{Name: "Plain", Container: d.DNC})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if ou.Protected {
+		t.Error("an OU created with no Protected field reports protected")
+	}
+}
+
+// A protected OU cannot be moved while the Deny is in place, because it covers
+// DeleteTree and AD checks that on a re-parent. Update lifts it and puts it
+// back, so a rename of a protected OU has to end protected.
+func TestOUMoveKeepsProtection(t *testing.T) {
+	ctx := context.Background()
+	d := newTestDirectory(t)
+
+	parent, err := d.OU.Create(ctx, adcore.OUSpec{Name: "NewParent", Container: d.DNC})
+	if err != nil {
+		t.Fatalf("Create parent: %v", err)
+	}
+	child, err := d.OU.Create(ctx, adcore.OUSpec{
+		Name: "Movable", Container: d.DNC, Protected: adcore.Bool(true),
+	})
+	if err != nil {
+		t.Fatalf("Create child: %v", err)
+	}
+
+	moved, err := d.OU.Update(ctx, adcore.ByGUID(child.GUID), adcore.OUSpec{
+		Name: "Moved", Container: parent.DN, Protected: adcore.Bool(true),
+	})
+	if err != nil {
+		t.Fatalf("Update moving a protected OU: %v", err)
+	}
+	if moved.GUID != child.GUID {
+		t.Fatalf("objectGUID changed: %q -> %q", child.GUID, moved.GUID)
+	}
+	if !moved.Protected {
+		t.Error("protection was lifted for the move and never restored")
+	}
+	if moved.DN != "OU=Moved,"+parent.DN {
+		t.Errorf("DN = %q", moved.DN)
+	}
+}
+
+// Delete with Unprotect lifts the Deny first; without it the directory's own
+// refusal stands.
+func TestOUDeleteUnprotectsFirst(t *testing.T) {
+	ctx := context.Background()
+	d := newTestDirectory(t)
+
+	ou, err := d.OU.Create(ctx, adcore.OUSpec{
+		Name: "Doomed2", Container: d.DNC, Protected: adcore.Bool(true),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := d.OU.Delete(ctx, adcore.ByGUID(ou.GUID), adcore.DeleteOptions{Unprotect: true}); err != nil {
+		t.Fatalf("Delete with Unprotect: %v", err)
+	}
+	if _, err := d.OU.Get(ctx, adcore.ByGUID(ou.GUID)); !errors.Is(err, adcore.ErrNotFound) {
+		t.Errorf("the OU is still readable: %v", err)
 	}
 }

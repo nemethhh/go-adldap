@@ -131,9 +131,16 @@ func (u *userDirectory) Create(ctx context.Context, spec adcore.UserSpec) (*adco
 	}
 	dn := cnRDN(name) + "," + spec.Container
 
-	// A new account starts disabled unless the spec says otherwise: AD
-	// refuses to enable an account that has no password yet.
-	uac := applyUAC(attrs.UACNormalAccount|attrs.UACAccountDisable, spec)
+	// The account is always created disabled, whatever the spec asks for, and
+	// enabled afterwards once it has a password. AD refuses to create an
+	// enabled account with no password, and refuses to stamp pwdLastSet on
+	// one — both with ERROR_PASSWORD_RESTRICTION (0x52D), which reads as
+	// "password rejected by domain policy" and names a password that was
+	// never the problem. This is the order New-ADUser uses.
+	uac := attrs.UACNormalAccount | attrs.UACAccountDisable
+	if spec.PasswordExpires != nil && !*spec.PasswordExpires {
+		uac |= attrs.UACDontExpirePassword
+	}
 
 	add := []conn.Attribute{
 		{Type: "objectClass", Vals: [][]byte{
@@ -163,9 +170,6 @@ func (u *userDirectory) Create(ctx context.Context, spec adcore.UserSpec) (*adco
 			Vals: [][]byte{[]byte(attrs.TimeToFileTime(spec.AccountExpiration.Value()))},
 		})
 	}
-	if spec.ChangePasswordAtLogon != nil && *spec.ChangePasswordAtLogon {
-		add = append(add, conn.Attribute{Type: "pwdLastSet", Vals: [][]byte{[]byte("0")}})
-	}
 
 	if err := u.c.withConn(ctx, op, func(cn conn.Conn) error {
 		return cn.Add(ctx, dn, add)
@@ -175,6 +179,28 @@ func (u *userDirectory) Create(ctx context.Context, spec adcore.UserSpec) (*adco
 
 	if spec.Password != nil && !spec.Password.IsZero() {
 		if err := u.SetPassword(ctx, adcore.ByDN(dn), *spec.Password); err != nil {
+			return nil, err
+		}
+	}
+
+	// Only now, with a password in place, can the account be told to expire it
+	// at next logon or be enabled.
+	var post []conn.Modification
+	if spec.ChangePasswordAtLogon != nil && *spec.ChangePasswordAtLogon {
+		post = append(post, conn.Modification{
+			Op: conn.ModReplace, Type: "pwdLastSet", Vals: [][]byte{[]byte("0")},
+		})
+	}
+	if spec.Enabled != nil && *spec.Enabled {
+		post = append(post, conn.Modification{
+			Op: conn.ModReplace, Type: "userAccountControl",
+			Vals: [][]byte{[]byte(attrs.Uint32String(uac &^ attrs.UACAccountDisable))},
+		})
+	}
+	if len(post) > 0 {
+		if err := u.c.withConn(ctx, op, func(cn conn.Conn) error {
+			return cn.Modify(ctx, dn, post)
+		}); err != nil {
 			return nil, err
 		}
 	}

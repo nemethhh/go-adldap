@@ -16,11 +16,11 @@ type stubConn struct {
 func (s *stubConn) Search(context.Context, SearchRequest) (*SearchResult, error) {
 	return &SearchResult{}, nil
 }
-func (s *stubConn) Add(context.Context, string, []Attribute) error               { return nil }
-func (s *stubConn) Modify(context.Context, string, []Modification) error         { return nil }
-func (s *stubConn) ModifyDN(context.Context, string, string, bool, string) error { return nil }
-func (s *stubConn) Delete(context.Context, string) error                         { return nil }
-func (s *stubConn) Close() error                                                 { s.closed.Store(true); return nil }
+func (s *stubConn) Add(context.Context, string, []Attribute) error                   { return nil }
+func (s *stubConn) Modify(context.Context, string, []Modification, ...Control) error { return nil }
+func (s *stubConn) ModifyDN(context.Context, string, string, bool, string) error     { return nil }
+func (s *stubConn) Delete(context.Context, string) error                             { return nil }
+func (s *stubConn) Close() error                                                     { s.closed.Store(true); return nil }
 
 type countingBinder struct{ n atomic.Int32 }
 

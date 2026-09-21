@@ -99,8 +99,12 @@ func (c *goldapConn) Add(ctx context.Context, dn string, attrs []Attribute) erro
 	return toRawError(c.l.Add(req))
 }
 
-func (c *goldapConn) Modify(ctx context.Context, dn string, mods []Modification) error {
-	req := ldap.NewModifyRequest(dn, nil)
+func (c *goldapConn) Modify(ctx context.Context, dn string, mods []Modification, controls ...Control) error {
+	ctrls := make([]ldap.Control, 0, len(controls))
+	for _, ct := range controls {
+		ctrls = append(ctrls, ldap.NewControlString(ct.OID, ct.Critical, string(ct.Value)))
+	}
+	req := ldap.NewModifyRequest(dn, ctrls)
 	for _, m := range mods {
 		vals := toStrings(m.Vals)
 		switch m.Op {

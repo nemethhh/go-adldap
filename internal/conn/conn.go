@@ -93,8 +93,26 @@ func (e *RawError) Unwrap() error { return e.Err }
 type Conn interface {
 	Search(ctx context.Context, req SearchRequest) (*SearchResult, error)
 	Add(ctx context.Context, dn string, attrs []Attribute) error
-	Modify(ctx context.Context, dn string, mods []Modification) error
+	Modify(ctx context.Context, dn string, mods []Modification, controls ...Control) error
 	ModifyDN(ctx context.Context, dn, newRDN string, deleteOldRDN bool, newSuperior string) error
 	Delete(ctx context.Context, dn string) error
 	Close() error
 }
+
+// SDFlagsControl is LDAP_SERVER_SD_FLAGS_OID, which scopes a read or write of
+// nTSecurityDescriptor to the parts named.
+//
+// Without it a read returns the SACL too, which requires SeSecurityPrivilege
+// the service account does not have, and a write replaces every part — so a
+// caller holding only the DACL would blank the owner. The value is a BER
+// SEQUENCE holding one INTEGER.
+func SDFlagsControl(flags int) Control {
+	return Control{
+		OID:      "1.2.840.113556.1.4.801",
+		Critical: true,
+		Value:    []byte{0x30, 0x03, 0x02, 0x01, byte(flags)},
+	}
+}
+
+// SDFlagDACL selects the discretionary ACL alone.
+const SDFlagDACL = 0x04

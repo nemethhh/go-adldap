@@ -213,6 +213,7 @@ func (c *memConn) Add(ctx context.Context, dn string, add []conn.Attribute) erro
 	}
 	// A DC stamps these; a client never sends them.
 	attrs["objectGUID"] = [][]byte{c.m.nextGUID()}
+	attrs["nTSecurityDescriptor"] = [][]byte{emptyDescriptor()}
 	attrs["distinguishedName"] = [][]byte{[]byte(dn)}
 	attrs["name"] = [][]byte{[]byte(rdnValue(dn))}
 	c.m.entries[dn] = attrs
@@ -232,7 +233,7 @@ func rdnValue(dn string) string {
 	return strings.ReplaceAll(parts[0][i+1:], `\`, "")
 }
 
-func (c *memConn) Modify(ctx context.Context, dn string, mods []conn.Modification) error {
+func (c *memConn) Modify(ctx context.Context, dn string, mods []conn.Modification, _ ...conn.Control) error {
 	c.m.mu.Lock()
 	defer c.m.mu.Unlock()
 	key := c.keyLocked(dn)
@@ -346,4 +347,21 @@ func hasControl(controls []conn.Control, oid string) bool {
 func isTombstone(attrs map[string][][]byte) bool {
 	vals, ok := lookupFold(attrs, "isDeleted")
 	return ok && len(vals) > 0 && strings.EqualFold(string(vals[0]), "TRUE")
+}
+
+// emptyDescriptor is a minimal self-relative security descriptor with an empty
+// DACL, which is what a freshly created object effectively presents to the
+// protection code. Built here rather than imported so the harness does not
+// depend on the package under test.
+func emptyDescriptor() []byte {
+	acl := make([]byte, 8)
+	acl[0] = 2 // ACL_REVISION
+	binary.LittleEndian.PutUint16(acl[2:4], 8)
+	binary.LittleEndian.PutUint16(acl[4:6], 0)
+
+	sd := make([]byte, 20)
+	sd[0] = 1                                          // revision
+	binary.LittleEndian.PutUint16(sd[2:4], 0x8000|0x4) // self-relative, DACL present
+	binary.LittleEndian.PutUint32(sd[16:20], 20)       // OffsetDacl
+	return append(sd, acl...)
 }

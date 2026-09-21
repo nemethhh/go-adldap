@@ -207,3 +207,34 @@ func TestCannotChangePasswordIsUnsupportedForNow(t *testing.T) {
 		t.Fatalf("want KindUnsupported, got %#v", err)
 	}
 }
+
+// AD refuses to create an enabled account with no password, and refuses to
+// stamp pwdLastSet on one — both with ERROR_PASSWORD_RESTRICTION, which
+// surfaces as "password rejected by domain policy" and blames a password that
+// was never the problem. The account is therefore created disabled and enabled
+// afterwards, which is the order New-ADUser uses. Found on the lab.
+func TestUserCreateEnabledWithPassword(t *testing.T) {
+	ctx := context.Background()
+	d := newTestDirectory(t)
+
+	u, err := d.User.Create(ctx, adcore.UserSpec{
+		Name: adcore.String("live"), SamAccountName: "live", Container: d.DNC,
+		Enabled:               adcore.Bool(true),
+		Password:              secretPtr("Correct-Horse-Battery-Staple-1"),
+		ChangePasswordAtLogon: adcore.Bool(true),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !u.Enabled {
+		t.Error("Enabled = false after creating an enabled account")
+	}
+	if !u.ChangePasswordAtLogon {
+		t.Error("ChangePasswordAtLogon = false after asking for it")
+	}
+}
+
+func secretPtr(s string) *adcore.Secret {
+	sec := adcore.NewSecret(s)
+	return &sec
+}
