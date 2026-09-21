@@ -6,7 +6,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/go-ldap/ldap/v3"
 	ldapgssapi "github.com/go-ldap/ldap/v3/gssapi"
+	"github.com/jcmturner/gokrb5/v8/iana/flags"
 )
 
 // KerberosBinder binds with a Kerberos ticket. The intended path is the
@@ -87,8 +89,25 @@ func (b KerberosBinder) Bind(ctx context.Context, c Conn) error {
 	// reconnect — which is what the Binder contract requires.
 	defer client.Close()
 
-	return annotateTicketError(toRawError(g.l.GSSAPIBind(client, b.spn(), "")))
+	return annotateTicketError(toRawError(g.l.GSSAPIBindRequestWithAPOptions(client, &ldap.GSSAPIBindRequest{
+		ServicePrincipalName: b.spn(),
+	}, apOptions())))
 }
+
+// apOptions are the AP-REQ options the bind sends.
+//
+// mutual-required is not optional against Active Directory, and leaving it out
+// is why the plain GSSAPIBind helper cannot bind to a domain controller at all.
+// That helper passes no AP options while the GSSAPI checksum it builds requests
+// ContextFlagMutual, so the AP-REQ asks for mutual authentication in one field
+// and not in the other. AD refuses the inconsistency with
+//
+//	AcceptSecurityContext error, data 57
+//
+// which is ERROR_INVALID_PARAMETER — a message that names neither Kerberos nor
+// the field, and reads like a credential problem when the ticket is perfect.
+// Setting the option makes the two agree and the bind succeeds.
+func apOptions() []int { return []int{flags.APOptionMutualRequired} }
 
 // annotateTicketError turns gokrb5's terse failures into something an operator
 // can act on. A TGT that has expired mid-apply is the common one: AD's default
