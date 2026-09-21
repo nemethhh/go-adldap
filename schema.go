@@ -56,10 +56,10 @@ func (s *schemaDirectory) resolveOne(ctx context.Context, op string, ref adcore.
 	case adcore.RefExtendedRight:
 		base = "CN=Extended-Rights," + s.c.configNC
 		filter = "(&(objectClass=controlAccessRight)" + adcore.Equal("displayName", ref.Name) + ")"
-		// rightsGUID is a STRING attribute, not an octet string. Formatting
+		// rightsGuid is a STRING attribute, not an octet string. Formatting
 		// its bytes as a binary GUID yields a well-formed value that matches
 		// nothing, and the ACE built from it grants a right nobody asked for.
-		attr, binaryGUID = "rightsGUID", false
+		attr, binaryGUID = "rightsGuid", false
 	default:
 		return "", &adcore.Error{Kind: adcore.KindConstraint, Op: op,
 			Err: fmt.Errorf("unknown schema reference kind %q", string(ref.Kind))}

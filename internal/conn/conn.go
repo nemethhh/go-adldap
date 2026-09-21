@@ -7,7 +7,10 @@
 // nTSecurityDescriptor are binary and a string round trip corrupts them.
 package conn
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 type Scope int
 
@@ -45,9 +48,21 @@ type Entry struct {
 }
 
 // First returns the first value of an attribute, or nil.
+//
+// The lookup falls back to a case-insensitive scan, because an LDAP attribute
+// description is case-insensitive (RFC 4512 2.5) and a server answers with the
+// schema's own spelling rather than the one that was asked for. An exact map
+// lookup alone therefore misses whenever a caller's constant differs from the
+// schema by a letter's case — which reads as "the directory returned no such
+// attribute" and is indistinguishable from the object genuinely not having it.
 func (e Entry) First(attr string) []byte {
 	if v := e.Attrs[attr]; len(v) > 0 {
 		return v[0]
+	}
+	for have, v := range e.Attrs {
+		if len(v) > 0 && strings.EqualFold(have, attr) {
+			return v[0]
+		}
 	}
 	return nil
 }

@@ -42,10 +42,10 @@ func TestSchemaResolveAttributeAndClass(t *testing.T) {
 	}
 }
 
-// rightsGUID is a STRING attribute, unlike schemaIDGUID. Formatting its bytes
+// rightsGuid is a STRING attribute, unlike schemaIDGUID. Formatting its bytes
 // as a binary GUID produces a well-formed value that matches nothing, and the
 // resulting ACE grants a right nobody asked for.
-func TestSchemaResolveExtendedRightReadsRightsGUIDAsAString(t *testing.T) {
+func TestSchemaResolveExtendedRightReadsRightsGuidAsAString(t *testing.T) {
 	ctx := context.Background()
 	m := adtest.StartMemory(t)
 	d := m.Directory(t)
@@ -53,7 +53,7 @@ func TestSchemaResolveExtendedRightReadsRightsGUIDAsAString(t *testing.T) {
 	m.Seed("CN=Reset Password,CN=Extended-Rights,CN=Configuration,"+d.DNC, map[string][][]byte{
 		"objectClass": {[]byte("controlAccessRight")},
 		"displayName": {[]byte("Reset Password")},
-		"rightsGUID":  {[]byte("00299570-246d-11d0-a768-00aa006e0529")},
+		"rightsGuid":  {[]byte("00299570-246d-11d0-a768-00aa006e0529")},
 	})
 
 	ref := adcore.SchemaRef{Kind: adcore.RefExtendedRight, Name: "Reset Password"}
@@ -62,7 +62,7 @@ func TestSchemaResolveExtendedRightReadsRightsGUIDAsAString(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if got[ref] != "00299570-246d-11d0-a768-00aa006e0529" {
-		t.Errorf("Reset Password = %q, want the rightsGUID verbatim", got[ref])
+		t.Errorf("Reset Password = %q, want the rightsGuid verbatim", got[ref])
 	}
 }
 

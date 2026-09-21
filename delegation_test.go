@@ -112,7 +112,7 @@ func seedSchema(t *testing.T, m *adtest.MemServer, dnc string) {
 	m.Seed("CN=Reset Password,CN=Extended-Rights,CN=Configuration,"+dnc, map[string][][]byte{
 		"objectClass": {[]byte("controlAccessRight")},
 		"displayName": {[]byte("Reset Password")},
-		"rightsGUID":  {[]byte("00299570-246d-11d0-a768-00aa006e0529")},
+		"rightsGuid":  {[]byte("00299570-246d-11d0-a768-00aa006e0529")},
 	})
 	m.Seed("CN=Password-Last-Set,CN=Schema,CN=Configuration,"+dnc, map[string][][]byte{
 		"objectClass":     {[]byte("attributeSchema")},
