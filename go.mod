@@ -6,8 +6,8 @@ require (
 	github.com/go-ldap/ldap/v3 v3.4.14
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/jimlambrt/gldap v0.1.14
-	github.com/nemethhh/go-adcore v0.1.0
-	github.com/nemethhh/go-adpwsh v0.22.0
+	github.com/nemethhh/go-adcore v0.2.0
+	github.com/nemethhh/go-adpwsh v0.23.0
 )
 
 require (

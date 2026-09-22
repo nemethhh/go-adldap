@@ -58,10 +58,10 @@ github.com/mattn/go-isatty v0.0.14/go.mod h1:7GGIvUiUoEMVVmxf/4nioHXj79iQHKdU27k
 github.com/mattn/go-isatty v0.0.16/go.mod h1:kYGgaQfpe5nmfYZH+SKPsOc2e4SrIfOl2e/yFXSvRLM=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
-github.com/nemethhh/go-adcore v0.1.0 h1:jXofXcKJZ+b0cC2BnjTXYDqopPjq7W5AmHVusDAkWwM=
-github.com/nemethhh/go-adcore v0.1.0/go.mod h1:MAfL99yKr23XTxNgEl8TYvNk7cn4fhRvnYutUHpob8k=
-github.com/nemethhh/go-adpwsh v0.22.0 h1:sk00A8qZzMa6CZzj0PHVac3wnZVfAPt8OerJzaI5NXo=
-github.com/nemethhh/go-adpwsh v0.22.0/go.mod h1:thstToTZCmC4hqZ5A70OES3XQMvYAHUMY+vs7WFB5ww=
+github.com/nemethhh/go-adcore v0.2.0 h1:Y2obml9xqsEqX4JxTvayI3JEDFivDT3DY3TVd3iNaEo=
+github.com/nemethhh/go-adcore v0.2.0/go.mod h1:MAfL99yKr23XTxNgEl8TYvNk7cn4fhRvnYutUHpob8k=
+github.com/nemethhh/go-adpwsh v0.23.0 h1:cjuwLb0/hobhU3gRYwXahIoId8ECa8ThorZXDqPLph0=
+github.com/nemethhh/go-adpwsh v0.23.0/go.mod h1:thstToTZCmC4hqZ5A70OES3XQMvYAHUMY+vs7WFB5ww=
 github.com/pkg/sftp v1.13.11 h1:0N92SLTB8JqASJB14ZLHHzFnBV8mG9zw4K7jghEFWuE=
 github.com/pkg/sftp v1.13.11/go.mod h1:uNkH9roSXglNJqM+glJJi+TQXQUm0fXFWqCFmT8hsN0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
