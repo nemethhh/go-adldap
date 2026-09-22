@@ -52,12 +52,33 @@ This is the Linux and macOS path. Windows keeps credentials in the LSA with no
 readable cache, so a Windows operator uses `simple` or `ntlm` until an SSPI
 client lands behind the `conn` seam.
 
-### Known gap: NTLM and channel binding
+Where `kinit` was never installed — CI, a scratch container — a credential can
+be supplied instead:
 
-Upstream go-ldap sends no channel-binding token, so a domain with
-`LdapEnforceChannelBinding` set to `2` rejects an NTLM bind even over TLS. The
-classifier spells this out rather than reporting a bare `strongerAuthRequired`,
-which sends operators to the LDAP *signing* setting instead.
+```go
+Kerberos: &adldap.KerberosAuth{
+    Username: "svc_tf",
+    Password: adcore.NewSecret(os.Getenv("AD_PASSWORD")),
+}
+```
+
+The realm defaults to the server's domain suffix uppercased, and with no
+`/etc/krb5.conf` present a minimal one is synthesized naming `Config.Server` as
+the KDC. At most one of `CCachePath`, `Keytab` and `Password` may be set.
+
+### Channel binding
+
+Every Kerberos bind carries a `tls-server-end-point` channel-binding token, so
+a domain with `LdapEnforceChannelBinding = 2` — required by the CIS Benchmark
+and the DISA STIG — accepts it. The token is computed from the certificate the
+connection actually negotiated, and is sent unconditionally, which is what a
+Windows client does.
+
+**NTLM is the remaining gap.** Upstream go-ldap sends no token, so `ntlm` is
+still refused where the policy is `2`, with `data 80090346` and no mention of
+channel binding. Use `kerberos` or `simple` there. This is a library choice
+rather than a protocol limit — the AV_PAIR exists — and is recorded as future
+work.
 
 ## Errors
 

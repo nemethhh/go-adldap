@@ -172,11 +172,19 @@ func (c Config) binderForHost(host string) (conn.Binder, error) {
 			Password: adcore.RevealSecret(c.Simple.Password),
 		}, nil
 	case c.Kerberos != nil:
+		// Derived from c.Server, never from host: binderForHost also runs for
+		// the replication probe's second controller, and deriving from that
+		// one would produce the right realm only by luck.
+		realm := c.Kerberos.Realm
+		if realm == "" {
+			realm = conn.RealmFromServer(c.Server)
+		}
 		return conn.KerberosBinder{
 			CCachePath:   c.Kerberos.CCachePath,
 			Keytab:       c.Kerberos.Keytab,
+			Password:     adcore.RevealSecret(c.Kerberos.Password),
 			Username:     c.Kerberos.Username,
-			Realm:        c.Kerberos.Realm,
+			Realm:        realm,
 			Krb5ConfPath: c.Kerberos.Krb5ConfPath,
 			SPN:          c.Kerberos.SPN,
 			Host:         host,
