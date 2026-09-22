@@ -1,0 +1,19 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          # The Go version comes from go.mod and nowhere else, so bumping the
+          # directive moves CI with it.
+          go-version-file: go.mod
+      # `make check` is build, vet, gofmt and test -race, in that order.
+      # Running the target rather than the four commands keeps CI and a
+      # developer's machine from drifting apart.
+      - run: make check
