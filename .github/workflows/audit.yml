@@ -1,0 +1,27 @@
+# Supply-chain checks, kept in their own workflow so a vulnerability and a
+# failing test stay two distinguishable signals rather than one red tick.
+name: audit
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays, 06:17 UTC. The offset is deliberate: GitHub drops scheduled runs
+    # when the fleet is busy, and the top of the hour is the busiest moment.
+    #
+    # The schedule is the point of this workflow. A vulnerability appears in a
+    # dependency without anyone touching this repository, and the Kerberos
+    # library here is a fork of an upstream that stopped accepting commits in
+    # 2022 — so nothing else is going to tell us.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # `make audit` is `go mod tidy -diff` then govulncheck.
+      - run: make audit

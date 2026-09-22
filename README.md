@@ -101,8 +101,23 @@ certificate the client verifies, so a wrong attribute encoding or a mis-sent
 control fails in CI rather than first on a lab domain.
 
 ```sh
-go test ./... -race
+make check
 ```
+
+That is build, `go vet`, a gofmt check and `go test ./... -race` — the same
+target CI runs, so a red build reproduces with one command rather than by
+reading the workflow. `-race` is not decoration: the pool hands connections to
+callers concurrently and each one runs a `Binder`, so a race here is a race on
+someone's credentials.
+
+```sh
+make audit
+```
+
+`go mod tidy -diff` and `govulncheck`. A scheduled run does this weekly as well
+as on every push, because a vulnerability appears in a dependency without
+anyone touching this repository — and the Kerberos library is a fork of an
+upstream that stopped accepting commits in 2022, so nothing else would say so.
 
 ## Licence
 
