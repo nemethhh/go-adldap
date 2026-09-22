@@ -101,6 +101,7 @@ func synthesizeKrb5Conf(realm, kdc string) (string, error) {
 // A bare host name yields nothing, because a host with no domain carries no
 // realm to derive.
 func RealmFromServer(server string) string {
+	server = strings.TrimSuffix(server, ".")
 	_, domain, found := strings.Cut(server, ".")
 	if !found || domain == "" {
 		return ""

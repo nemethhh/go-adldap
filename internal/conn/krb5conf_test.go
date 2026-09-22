@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func statFound(string) (os.FileInfo, error)    { return nil, nil }
-func statMissing(string) (os.FileInfo, error)  { return nil, os.ErrNotExist }
+func statFound(string) (os.FileInfo, error)   { return nil, nil }
+func statMissing(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 
 // A realm has to come from somewhere when nothing is configured. The pinned
 // server's domain suffix is the only thing available, and uppercasing it is
@@ -16,6 +16,8 @@ func TestRealmFromServer(t *testing.T) {
 	for _, tc := range []struct{ server, want string }{
 		{"dc01.corp.local", "CORP.LOCAL"},
 		{"DC01.Corp.Local", "CORP.LOCAL"},
+		{"dc01.corp.local.", "CORP.LOCAL"},
+		{"dc01.", ""},
 		{"dc01", ""},
 		{"", ""},
 	} {
@@ -100,5 +102,20 @@ func TestSystemConfigWinsOverSynthesis(t *testing.T) {
 	_, _ = loadKrb5Conf("", "CORP.LOCAL", "dc01.corp.local", stat)
 	if asked != systemKrb5Conf {
 		t.Errorf("stat called with %q, want %q", asked, systemKrb5Conf)
+	}
+}
+
+// When stat fails for reasons other than the file not existing, that error
+// surfaces rather than triggering synthesis. A permission error on the system
+// config file should not cause a silent fallback to a synthesized config built
+// from the passed realm and KDC.
+func TestStatErrorSurfacesNotSynthesis(t *testing.T) {
+	statPermissionDenied := func(string) (os.FileInfo, error) { return nil, os.ErrPermission }
+	_, err := loadKrb5Conf("", "CORP.LOCAL", "dc01.corp.local", statPermissionDenied)
+	if err == nil {
+		t.Fatal("a stat permission error was silently handled with synthesis")
+	}
+	if !strings.Contains(err.Error(), systemKrb5Conf) {
+		t.Errorf("error should name the system config path: %v", err)
 	}
 }
