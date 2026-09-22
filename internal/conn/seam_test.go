@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-// go-ldap is imported in exactly one package. The whole point of this seam is
-// that swapping the LDAP library — for a fork with SASL sign+seal and channel
-// binding, say — is a one-package change. An import anywhere else silently
-// removes that property.
-func TestGoLDAPIsImportedOnlyHere(t *testing.T) {
+// go-ldap and the Kerberos library are imported in exactly one package. The
+// whole point of this seam is that swapping either — for a fork, or for a
+// maintained successor — is a one-package change. An import anywhere else
+// silently removes that property.
+func TestLDAPAndKerberosAreImportedOnlyHere(t *testing.T) {
 	root := filepath.Join("..", "..")
 	// Asserting only "nowhere else" would pass vacuously if the adapter were
 	// deleted, and a seam nothing sits behind guards nothing. The import must
@@ -31,14 +31,15 @@ func TestGoLDAPIsImportedOnlyHere(t *testing.T) {
 		}
 		rel, _ := filepath.Rel(root, path)
 		for _, imp := range append(pkg.Imports, pkg.TestImports...) {
-			if !strings.HasPrefix(imp, "github.com/go-ldap/") {
+			if !strings.HasPrefix(imp, "github.com/go-ldap/") &&
+				!strings.HasPrefix(imp, "github.com/oiweiwei/gokrb5.fork/") {
 				continue
 			}
 			if rel == filepath.Join("internal", "conn") {
 				foundHere = true
 				continue
 			}
-			t.Errorf("package %s imports %s; go-ldap belongs only in internal/conn", rel, imp)
+			t.Errorf("package %s imports %s; go-ldap and the Kerberos library belong only in internal/conn", rel, imp)
 		}
 		return nil
 	})
@@ -46,6 +47,6 @@ func TestGoLDAPIsImportedOnlyHere(t *testing.T) {
 		t.Fatalf("walk: %v", err)
 	}
 	if !foundHere {
-		t.Error("no package imports go-ldap; internal/conn is meant to be the adapter that does")
+		t.Error("no package imports them; internal/conn is meant to be the adapter that does")
 	}
 }

@@ -1,9 +1,10 @@
 package conn
 
 import (
+	"strings"
 	"testing"
 
-	"github.com/jcmturner/gokrb5/v8/iana/flags"
+	"github.com/oiweiwei/gokrb5.fork/v9/iana/flags"
 )
 
 // The AP-REQ must request mutual authentication. go-ldap's own GSSAPIBind
@@ -25,4 +26,36 @@ func TestAPOptionsRequestMutualAuthentication(t *testing.T) {
 		}
 	}
 	t.Errorf("apOptions() = %v, want it to contain APOptionMutualRequired (%d)", got, flags.APOptionMutualRequired)
+}
+
+// The bind must present a channel-binding token derived from the certificate
+// the connection actually negotiated. A binder that computed it from anything
+// else — a configured hostname, a cached certificate — would bind to the wrong
+// channel and be refused by exactly the domains this exists to support.
+func TestBindDerivesTheTokenFromTheConnectionCertificate(t *testing.T) {
+	_, leaf := newTestCA(t, "dc01.corp.local")
+
+	got := KerberosBinder{Host: "dc01.corp.local"}.tokenForCertificate(leaf)
+	want := channelBindingToken(leaf)
+
+	if string(got) != string(want) {
+		t.Errorf("token = % x, want the certificate's own % x", got, want)
+	}
+}
+
+// No peer certificate means no channel binding. That is not an error — TLS is
+// mandatory here so it cannot normally happen — but it must yield nil rather
+// than a token over a nil certificate.
+func TestNoCertificateYieldsNoToken(t *testing.T) {
+	if got := (KerberosBinder{}).tokenForCertificate(nil); got != nil {
+		t.Errorf("token = % x, want nil when there is no peer certificate", got)
+	}
+}
+
+// Describe must name the mechanism without ever naming the credential.
+func TestDescribeNeverLeaksAPassword(t *testing.T) {
+	b := KerberosBinder{Username: "svc_tf", Realm: "CORP.LOCAL", Password: "hunter2"}
+	if got := b.Describe(); strings.Contains(got, "hunter2") {
+		t.Fatalf("Describe() leaked the password: %q", got)
+	}
 }
