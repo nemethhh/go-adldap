@@ -33,17 +33,25 @@ type SimpleAuth struct {
 }
 
 // KerberosAuth binds with a Kerberos ticket. The zero value uses the ambient
-// credential cache, which is the intended path: an operator runs kinit in
+// credential cache, which is the preferred path: an operator runs kinit in
 // their own shell and no password reaches Terraform configuration.
 //
-// Resolution order is CCachePath, then KRB5CCNAME, then Keytab.
+// At most one of CCachePath, Keytab and Password may be set. With none set the
+// ambient KRB5CCNAME applies.
 type KerberosAuth struct {
 	// CCachePath names a credential cache file explicitly.
 	CCachePath string
 	// Keytab and Username authenticate unattended, for CI with no kinit.
 	Keytab   string
 	Username string
-	Realm    string
+	// Password authenticates from a supplied credential, for a runner where
+	// kinit was never installed at all. It requires Username. With no
+	// Krb5ConfPath and no /etc/krb5.conf, a minimal configuration is
+	// synthesized from Realm and Server — otherwise this path would work only
+	// where it was least needed.
+	Password adcore.Secret
+	// Realm defaults to Server's domain suffix, uppercased.
+	Realm string
 	// Krb5ConfPath overrides /etc/krb5.conf.
 	Krb5ConfPath string
 	// SPN overrides the service principal, which defaults to ldap/<server>.
@@ -142,6 +150,30 @@ func (c Config) Validate() error {
 	}
 	if c.NTLM != nil && c.NTLM.Username == "" {
 		return constraint("NTLM.Username is required")
+	}
+
+	if c.Kerberos != nil {
+		sources := 0
+		for _, set := range []bool{
+			c.Kerberos.CCachePath != "",
+			c.Kerberos.Keytab != "",
+			!c.Kerberos.Password.IsZero(),
+		} {
+			if set {
+				sources++
+			}
+		}
+		if sources > 1 {
+			return constraint("at most one of Kerberos.CCachePath, Kerberos.Keytab or " +
+				"Kerberos.Password may be set; with none set the ambient KRB5CCNAME applies. " +
+				"Choosing between two silently would authenticate as an identity nobody picked")
+		}
+		if !c.Kerberos.Password.IsZero() && c.Kerberos.Username == "" {
+			return constraint("Kerberos.Password requires Kerberos.Username")
+		}
+		if c.Kerberos.Keytab != "" && c.Kerberos.Username == "" {
+			return constraint("Kerberos.Keytab requires Kerberos.Username")
+		}
 	}
 	return nil
 }

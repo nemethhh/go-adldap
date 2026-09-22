@@ -2,19 +2,30 @@ package conn
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
-	ldapgssapi "github.com/go-ldap/ldap/v3/gssapi"
-	"github.com/jcmturner/gokrb5/v8/iana/flags"
+	"github.com/oiweiwei/gokrb5.fork/v9/iana/flags"
 )
 
-// KerberosBinder binds with a Kerberos ticket. The intended path is the
-// ambient credential cache: an operator runs kinit in their own shell and no
-// password reaches Terraform configuration. Keytab is the unattended
-// alternative for CI.
+// KerberosBinder binds with a Kerberos ticket.
+//
+// The preferred path remains the ambient credential cache: an operator runs
+// kinit in their own shell and no password reaches Terraform configuration.
+// Keytab and Password are the unattended alternatives, for CI and for any
+// runner where kinit was never installed.
+//
+// Every bind carries a tls-server-end-point channel-binding token, which is
+// what a domain with LdapEnforceChannelBinding = 2 requires. That setting is
+// in the CIS Benchmark and the DISA STIG, so it is the configuration of the
+// domains most likely to be automated. Sending it unconditionally is what a
+// Windows client does: a controller at 0 ignores the token, at 1 validates it
+// when present, at 2 requires it.
 //
 // This is the Linux and macOS path. Windows keeps credentials in the LSA with
 // no readable ccache, so a Windows operator uses simple or NTLM until an SSPI
@@ -22,6 +33,7 @@ import (
 type KerberosBinder struct {
 	CCachePath   string
 	Keytab       string
+	Password     string
 	Username     string
 	Realm        string
 	Krb5ConfPath string
@@ -34,10 +46,14 @@ type KerberosBinder struct {
 var _ Binder = KerberosBinder{}
 
 func (b KerberosBinder) Describe() string {
-	if b.Keytab != "" {
-		return fmt.Sprintf("GSSAPI bind as %s@%s from keytab", b.Username, b.Realm)
+	switch {
+	case b.Keytab != "":
+		return fmt.Sprintf("GSSAPI bind as %s@%s from a keytab", b.Username, b.Realm)
+	case b.Password != "":
+		return fmt.Sprintf("GSSAPI bind as %s@%s from a supplied password", b.Username, b.Realm)
+	default:
+		return "GSSAPI bind from the ambient credential cache"
 	}
-	return "GSSAPI bind from the ambient credential cache"
 }
 
 func (b KerberosBinder) spn() string {
@@ -47,11 +63,25 @@ func (b KerberosBinder) spn() string {
 	return "ldap/" + b.Host
 }
 
-func (b KerberosBinder) krb5Conf() string {
-	if b.Krb5ConfPath != "" {
-		return b.Krb5ConfPath
+// tokenForCertificate is the channel binding for one connection. Split out so
+// the derivation can be tested without a domain controller.
+func (b KerberosBinder) tokenForCertificate(cert *x509.Certificate) []byte {
+	if cert == nil {
+		return nil
 	}
-	return "/etc/krb5.conf"
+	return channelBindingToken(cert)
+}
+
+// peerCertificate reads the leaf certificate the connection actually
+// negotiated. Split out from Bind so a literal tls.ConnectionState can pin
+// that extraction directly — the risk is a future refactor that sources the
+// certificate from configuration instead of the live handshake, which no
+// test on tokenForCertificate alone would catch.
+func peerCertificate(state tls.ConnectionState, ok bool) *x509.Certificate {
+	if !ok || len(state.PeerCertificates) == 0 {
+		return nil
+	}
+	return state.PeerCertificates[0]
 }
 
 func (b KerberosBinder) Bind(ctx context.Context, c Conn) error {
@@ -65,29 +95,40 @@ func (b KerberosBinder) Bind(ctx context.Context, c Conn) error {
 		getenv = os.Getenv
 	}
 
-	var (
-		client *ldapgssapi.Client
-		err    error
-	)
-	if b.Keytab != "" {
-		client, err = ldapgssapi.NewClientWithKeytab(b.Username, b.Realm, b.Keytab, b.krb5Conf())
-	} else {
-		var path string
-		path, err = ResolveCCachePath(b.CCachePath, getenv)
-		if err != nil {
-			return err
-		}
-		client, err = ldapgssapi.NewClientFromCCache(path, b.krb5Conf())
+	// The certificate comes from the connection that is about to be bound,
+	// never from configuration. Binding to anything else is the one mistake
+	// channel binding exists to detect.
+	state, tlsOK := g.l.TLSConnectionState()
+	cert := peerCertificate(state, tlsOK)
+	if cert == nil {
+		// TLS is already mandatory throughout this package (dial.go never
+		// connects without it), so this is unreachable today. It stays a hard
+		// error rather than a silent fall-through to no channel binding,
+		// because that fall-through is exactly the downgrade this feature
+		// exists to prevent — binding without a token while believing
+		// otherwise is worse than refusing to bind at all.
+		return errors.New("adldap: no TLS state on this connection; TLS is mandatory in this " +
+			"package, and binding without a channel-binding token would be a silent downgrade")
 	}
+
+	src, err := newTicketSource(ticketSourceOptions{
+		CCachePath:   b.CCachePath,
+		Keytab:       b.Keytab,
+		Password:     b.Password,
+		Username:     b.Username,
+		Realm:        b.Realm,
+		Krb5ConfPath: b.Krb5ConfPath,
+		KDC:          b.Host,
+		Getenv:       getenv,
+	})
 	if err != nil {
 		return annotateTicketError(err)
 	}
-	// Close over DeleteSecContext: DeleteSecContext clears only the session
-	// subkeys, while Close calls Destroy and zeroes the credential material
-	// read out of the ccache too. A fresh client is built on every Bind, so
-	// destroying this one leaves the Binder reusable for the pool's
-	// reconnect — which is what the Binder contract requires.
-	defer client.Close()
+	// A fresh source is built on every Bind, so destroying this one leaves the
+	// Binder reusable for the pool's reconnect — which the Binder contract
+	// requires.
+	client := newGSSClient(src, b.tokenForCertificate(cert))
+	defer func() { _ = client.Close() }()
 
 	return annotateTicketError(toRawError(g.l.GSSAPIBindRequestWithAPOptions(client, &ldap.GSSAPIBindRequest{
 		ServicePrincipalName: b.spn(),
@@ -109,10 +150,8 @@ func (b KerberosBinder) Bind(ctx context.Context, c Conn) error {
 // Setting the option makes the two agree and the bind succeeds.
 func apOptions() []int { return []int{flags.APOptionMutualRequired} }
 
-// annotateTicketError turns gokrb5's terse failures into something an operator
-// can act on. A TGT that has expired mid-apply is the common one: AD's default
-// ticket lifetime is ten hours and gokrb5 does not renew, so a long apply can
-// outlive its own credential.
+// annotateTicketError turns terse Kerberos failures into something an operator
+// can act on.
 func annotateTicketError(err error) error {
 	if err == nil {
 		return nil
@@ -121,6 +160,13 @@ func annotateTicketError(err error) error {
 	switch {
 	case strings.Contains(msg, "TGT not found in CCache"):
 		return fmt.Errorf("%w: the credential cache holds no ticket-granting ticket; run kinit again", err)
+	case strings.Contains(msg, "KDC_ERR_PREAUTH_FAILED"):
+		return fmt.Errorf("%w: the KDC rejected the credential; the password is wrong, or the "+
+			"account is disabled or locked out", err)
+	case strings.Contains(msg, "KDC_ERR_C_PRINCIPAL_UNKNOWN"):
+		return fmt.Errorf("%w: the KDC does not know that principal; check both the username and "+
+			"the realm — when Kerberos.Realm is unset it is derived from Config.Server's domain "+
+			"suffix, uppercased", err)
 	case strings.Contains(msg, "expired"), strings.Contains(msg, "Ticket expired"):
 		return fmt.Errorf("%w: the Kerberos ticket has expired; run kinit again "+
 			"(AD's default ticket lifetime is 10 hours and it is not renewed automatically)", err)

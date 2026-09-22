@@ -3,3 +3,7 @@ coverage.out
 .idea/
 .claude/
 .mcp.json
+
+# Superpowers working scaffolding: specs, plans, brainstorms. Never repository
+# content.
+docs/superpowers/

@@ -2,6 +2,7 @@ package adldap_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nemethhh/go-adcore"
@@ -65,5 +66,61 @@ func TestDefaultPort(t *testing.T) {
 	}
 	if got := adldap.DefaultPort(adldap.TLSStartTLS); got != 389 {
 		t.Errorf("starttls port = %d, want 389", got)
+	}
+}
+
+// Two credential sources is a configuration mistake, not a precedence
+// question. Picking one silently would authenticate as an identity the
+// operator did not choose.
+func TestTwoKerberosCredentialSourcesIsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		auth adldap.KerberosAuth
+	}{
+		{"keytab and password", adldap.KerberosAuth{Keytab: "/k.keytab", Password: adcore.NewSecret("p"), Username: "u"}},
+		{"ccache and password", adldap.KerberosAuth{CCachePath: "/tmp/cc", Password: adcore.NewSecret("p"), Username: "u"}},
+		{"ccache and keytab", adldap.KerberosAuth{CCachePath: "/tmp/cc", Keytab: "/k.keytab", Username: "u"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := adldap.Config{Server: "dc01.corp.local", TLS: adldap.TLSLDAPS, Kerberos: &tc.auth}
+			if err := c.Validate(); err == nil {
+				t.Fatal("two credential sources were accepted")
+			}
+		})
+	}
+}
+
+// One source, or none, is fine. None means the ambient cache, which is the
+// intended path and must keep validating.
+func TestOneOrNoKerberosCredentialSourceIsAccepted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		auth adldap.KerberosAuth
+	}{
+		{"none, the ambient cache", adldap.KerberosAuth{}},
+		{"password", adldap.KerberosAuth{Password: adcore.NewSecret("p"), Username: "u"}},
+		{"keytab", adldap.KerberosAuth{Keytab: "/k.keytab", Username: "u"}},
+		{"ccache", adldap.KerberosAuth{CCachePath: "/tmp/cc"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := adldap.Config{Server: "dc01.corp.local", TLS: adldap.TLSLDAPS, Kerberos: &tc.auth}
+			if err := c.Validate(); err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+		})
+	}
+}
+
+// A password with no principal cannot produce an AS-REQ. Catching it here is
+// better than the KDC's report of an unknown principal.
+func TestKerberosPasswordRequiresAUsername(t *testing.T) {
+	c := adldap.Config{Server: "dc01.corp.local", TLS: adldap.TLSLDAPS,
+		Kerberos: &adldap.KerberosAuth{Password: adcore.NewSecret("hunter2")}}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("a password with no username was accepted")
+	}
+	if !strings.Contains(err.Error(), "Username") {
+		t.Errorf("error should name the missing username: %v", err)
 	}
 }

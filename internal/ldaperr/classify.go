@@ -140,9 +140,16 @@ func explain(raw *conn.RawError) string {
 		// Over TLS, strongerAuthRequired is the channel-binding policy, not
 		// the signing policy. Saying "LDAP signing" here would send an
 		// operator to the wrong setting.
+		//
+		// The Kerberos bind does send a token, so reaching this with kerberos
+		// configured means the token was rejected rather than absent — a
+		// TLS-terminating middlebox between this client and the controller is
+		// the usual cause.
 		return "the domain controller requires channel binding for SASL binds " +
-			"(LdapEnforceChannelBinding). Upstream go-ldap does not send a channel-binding " +
-			"token; use a simple bind over LDAPS, or lower the policy"
+			"(LdapEnforceChannelBinding). The NTLM bind cannot comply — the LDAP library " +
+			"sends no token for it — so use kerberos, which does, or simple over LDAPS. " +
+			"If kerberos produced this, the token was rejected rather than missing: " +
+			"something is terminating TLS between this client and the controller"
 	}
 	for _, s := range bindSubStatus {
 		if strings.Contains(raw.DiagnosticMessage, s.data) {

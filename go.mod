@@ -4,15 +4,14 @@ go 1.25.0
 
 require (
 	github.com/go-ldap/ldap/v3 v3.4.14
-	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/jimlambrt/gldap v0.1.14
 	github.com/nemethhh/go-adcore v0.2.0
 	github.com/nemethhh/go-adpwsh v0.23.0
+	github.com/oiweiwei/gokrb5.fork/v9 v9.0.6
 )
 
 require (
 	github.com/Azure/go-ntlmssp v0.1.1 // indirect
-	github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fatih/color v1.17.0 // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.8 // indirect
