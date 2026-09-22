@@ -1,11 +1,14 @@
 package conn
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"net"
 	"strings"
 	"testing"
 
+	"github.com/go-ldap/ldap/v3"
 	"github.com/oiweiwei/gokrb5.fork/v9/iana/flags"
 )
 
@@ -45,12 +48,29 @@ func TestBindDerivesTheTokenFromTheConnectionCertificate(t *testing.T) {
 	}
 }
 
-// No peer certificate means no channel binding. That is not an error — TLS is
-// mandatory here so it cannot normally happen — but it must yield nil rather
-// than a token over a nil certificate.
+// tokenForCertificate is a pure helper: a nil certificate yields a nil token,
+// never a token over a nil certificate. Bind itself is stricter — it treats a
+// nil certificate (no TLS state on the connection) as a hard error rather
+// than calling this helper and binding with no channel binding; see
+// TestBindRefusesToBindWithNoPeerCertificate.
 func TestNoCertificateYieldsNoToken(t *testing.T) {
 	if got := (KerberosBinder{}).tokenForCertificate(nil); got != nil {
 		t.Errorf("token = % x, want nil when there is no peer certificate", got)
+	}
+}
+
+func TestBindRefusesToBindWithNoPeerCertificate(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	l := ldap.NewConn(client, false)
+
+	err := (KerberosBinder{}).Bind(context.Background(), &goldapConn{l: l})
+	if err == nil {
+		t.Fatal("Bind must refuse a connection with no TLS state, not bind with no channel binding")
+	}
+	if !strings.Contains(err.Error(), "TLS is mandatory") {
+		t.Errorf("error = %q, want it to say TLS is mandatory", err.Error())
 	}
 }
 

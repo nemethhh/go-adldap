@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -99,6 +100,16 @@ func (b KerberosBinder) Bind(ctx context.Context, c Conn) error {
 	// channel binding exists to detect.
 	state, tlsOK := g.l.TLSConnectionState()
 	cert := peerCertificate(state, tlsOK)
+	if cert == nil {
+		// TLS is already mandatory throughout this package (dial.go never
+		// connects without it), so this is unreachable today. It stays a hard
+		// error rather than a silent fall-through to no channel binding,
+		// because that fall-through is exactly the downgrade this feature
+		// exists to prevent — binding without a token while believing
+		// otherwise is worse than refusing to bind at all.
+		return errors.New("adldap: no TLS state on this connection; TLS is mandatory in this " +
+			"package, and binding without a channel-binding token would be a silent downgrade")
+	}
 
 	src, err := newTicketSource(ticketSourceOptions{
 		CCachePath:   b.CCachePath,

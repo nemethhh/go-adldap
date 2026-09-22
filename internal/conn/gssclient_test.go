@@ -126,4 +126,7 @@ func TestAPREQCarriesTheChannelBindingOnTheWire(t *testing.T) {
 	if !bytes.Equal(auth.Cksum.Checksum[4:20], bnd) {
 		t.Errorf("Bnd on the wire = % x, want % x", auth.Cksum.Checksum[4:20], bnd)
 	}
+	if !types.IsFlagSet(&back.APReq.APOptions, flags.APOptionMutualRequired) {
+		t.Error("APOptionMutualRequired is not set on the wire AP-REQ; AD accepts this with an opaque data 57")
+	}
 }

@@ -38,10 +38,21 @@ type ticketSource interface {
 // At most one of CCachePath, Keytab and Password is set; Config.Validate
 // enforces that above this package, and with none set KRB5CCNAME applies.
 type ticketSourceOptions struct {
-	CCachePath   string
-	Keytab       string
-	Password     string
-	Username     string
+	CCachePath string
+	Keytab     string
+	Password   string
+	Username   string
+	// Realm is always populated on the normal path: client.go's binderForHost
+	// derives it from Config.Server, deliberately never from the dialled host,
+	// before KerberosBinder (and, through it, ticketSourceOptions) is ever
+	// built — see the comment on that derivation. The fallback below that
+	// derives Realm from KDC when this is left empty is reached only by a
+	// caller inside this package that constructs ticketSourceOptions directly
+	// rather than through client.go — this file's own tests, for instance.
+	// That caller supplies KDC and Realm together and is not juggling a
+	// second, differently realmed controller behind it the way client.go's
+	// replication probe does, so the concern that derivation warns about does
+	// not apply here: KDC is a safe, and the only available, fallback.
 	Realm        string
 	Krb5ConfPath string
 	// KDC is the pinned domain controller, used both as the KDC in a
