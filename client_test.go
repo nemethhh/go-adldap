@@ -31,6 +31,22 @@ func TestKerberosSPNFollowsTheHostDialled(t *testing.T) {
 	}
 }
 
+// binderForHost runs again for the replication probe's second controller.
+// Deriving the realm from that host rather than from Config.Server would
+// still pass every other test here, because both existing cross-host cases
+// share the corp.local suffix; only a genuinely different suffix can tell the
+// two derivations apart.
+func TestKerberosRealmFollowsConfigServerNotTheDialledHost(t *testing.T) {
+	cfg := adldap.Config{
+		Server:   "dc01.corp.local",
+		TLS:      adldap.TLSLDAPS,
+		Kerberos: &adldap.KerberosAuth{},
+	}
+	if got := adldap.BinderRealmForHost(cfg, "dc99.other.example"); got != "CORP.LOCAL" {
+		t.Errorf("realm = %q, want CORP.LOCAL (derived from Config.Server, not the dialled host)", got)
+	}
+}
+
 // An explicit SPN still wins over the per-host default.
 func TestExplicitKerberosSPNWinsOverTheHost(t *testing.T) {
 	cfg := adldap.Config{

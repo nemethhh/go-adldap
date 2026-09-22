@@ -27,9 +27,11 @@ that hits DC-B reports "not found".
 two. Guessing would authenticate as the wrong identity.
 
 **go-ldap lives in exactly one package.** `internal/conn` adapts it behind an
-interface whose types are this module's own, so swapping in a fork with SASL
-sign+seal and channel binding is a one-package change. A test asserts the
-import is there and nowhere else.
+interface whose types are this module's own — which is why swapping
+`jcmturner/gokrb5` for `oiweiwei/gokrb5.fork` to add channel binding touched
+only this package. A test asserts the imports are there and nowhere else.
+GSSAPI sign/seal was considered and declined: TLS already protects the
+connection, so a second encryption layer buys nothing.
 
 **All attribute values are `[][]byte`.** `objectGUID`, `objectSid` and
 `nTSecurityDescriptor` are binary; reading them back as strings corrupts them.
