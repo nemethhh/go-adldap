@@ -16,8 +16,12 @@ func TestLDAPAndKerberosAreImportedOnlyHere(t *testing.T) {
 	root := filepath.Join("..", "..")
 	// Asserting only "nowhere else" would pass vacuously if the adapter were
 	// deleted, and a seam nothing sits behind guards nothing. The import must
-	// be here, and only here.
-	var foundHere bool
+	// be here, and only here. Two independent bools, not one combined: a
+	// single foundHere only proves at least one library is imported in
+	// internal/conn, so deleting either adapter alone would pass silently.
+	const ldapPrefix = "github.com/go-ldap/"
+	const kerberosPrefix = "github.com/oiweiwei/gokrb5.fork/"
+	var foundLDAPHere, foundKerberosHere bool
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || !info.IsDir() {
 			return err
@@ -31,12 +35,17 @@ func TestLDAPAndKerberosAreImportedOnlyHere(t *testing.T) {
 		}
 		rel, _ := filepath.Rel(root, path)
 		for _, imp := range append(pkg.Imports, pkg.TestImports...) {
-			if !strings.HasPrefix(imp, "github.com/go-ldap/") &&
-				!strings.HasPrefix(imp, "github.com/oiweiwei/gokrb5.fork/") {
+			var here *bool
+			switch {
+			case strings.HasPrefix(imp, ldapPrefix):
+				here = &foundLDAPHere
+			case strings.HasPrefix(imp, kerberosPrefix):
+				here = &foundKerberosHere
+			default:
 				continue
 			}
 			if rel == filepath.Join("internal", "conn") {
-				foundHere = true
+				*here = true
 				continue
 			}
 			t.Errorf("package %s imports %s; go-ldap and the Kerberos library belong only in internal/conn", rel, imp)
@@ -46,7 +55,10 @@ func TestLDAPAndKerberosAreImportedOnlyHere(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk: %v", err)
 	}
-	if !foundHere {
-		t.Error("no package imports them; internal/conn is meant to be the adapter that does")
+	if !foundLDAPHere {
+		t.Error("no package imports go-ldap; internal/conn is meant to be the adapter that does")
+	}
+	if !foundKerberosHere {
+		t.Error("no package imports the Kerberos library; internal/conn is meant to be the adapter that does")
 	}
 }

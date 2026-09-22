@@ -1,6 +1,8 @@
 package conn
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"strings"
 	"testing"
 
@@ -57,5 +59,32 @@ func TestDescribeNeverLeaksAPassword(t *testing.T) {
 	b := KerberosBinder{Username: "svc_tf", Realm: "CORP.LOCAL", Password: "hunter2"}
 	if got := b.Describe(); strings.Contains(got, "hunter2") {
 		t.Fatalf("Describe() leaked the password: %q", got)
+	}
+}
+
+// peerCertificate is what Bind actually calls to read the certificate off the
+// connection. Pinning it directly, rather than only through
+// tokenForCertificate, is what catches a future refactor that sources the
+// certificate from configuration instead of the live handshake.
+func TestPeerCertificateReturnsTheLeaf(t *testing.T) {
+	_, leaf := newTestCA(t, "dc01.corp.local")
+
+	got := peerCertificate(tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}}, true)
+	if got != leaf {
+		t.Errorf("peerCertificate = %v, want the connection's leaf certificate", got)
+	}
+}
+
+func TestPeerCertificateWithoutTLSStateReturnsNil(t *testing.T) {
+	_, leaf := newTestCA(t, "dc01.corp.local")
+
+	if got := peerCertificate(tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}}, false); got != nil {
+		t.Errorf("peerCertificate = %v, want nil when TLSConnectionState reports ok == false", got)
+	}
+}
+
+func TestPeerCertificateWithNoCertificatesReturnsNil(t *testing.T) {
+	if got := peerCertificate(tls.ConnectionState{}, true); got != nil {
+		t.Errorf("peerCertificate = %v, want nil when the connection carries no peer certificates", got)
 	}
 }

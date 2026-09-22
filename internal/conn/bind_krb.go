@@ -2,6 +2,7 @@ package conn
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"os"
@@ -70,6 +71,18 @@ func (b KerberosBinder) tokenForCertificate(cert *x509.Certificate) []byte {
 	return channelBindingToken(cert)
 }
 
+// peerCertificate reads the leaf certificate the connection actually
+// negotiated. Split out from Bind so a literal tls.ConnectionState can pin
+// that extraction directly — the risk is a future refactor that sources the
+// certificate from configuration instead of the live handshake, which no
+// test on tokenForCertificate alone would catch.
+func peerCertificate(state tls.ConnectionState, ok bool) *x509.Certificate {
+	if !ok || len(state.PeerCertificates) == 0 {
+		return nil
+	}
+	return state.PeerCertificates[0]
+}
+
 func (b KerberosBinder) Bind(ctx context.Context, c Conn) error {
 	g, ok := c.(*goldapConn)
 	if !ok {
@@ -84,10 +97,8 @@ func (b KerberosBinder) Bind(ctx context.Context, c Conn) error {
 	// The certificate comes from the connection that is about to be bound,
 	// never from configuration. Binding to anything else is the one mistake
 	// channel binding exists to detect.
-	var cert *x509.Certificate
-	if state, ok := g.l.TLSConnectionState(); ok && len(state.PeerCertificates) > 0 {
-		cert = state.PeerCertificates[0]
-	}
+	state, tlsOK := g.l.TLSConnectionState()
+	cert := peerCertificate(state, tlsOK)
 
 	src, err := newTicketSource(ticketSourceOptions{
 		CCachePath:   b.CCachePath,
