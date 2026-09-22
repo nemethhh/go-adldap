@@ -84,3 +84,21 @@ go test ./... -race
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
+
+## The cross-backend differential suite
+
+`acc_differential_test.go` is behind the `acc` build tag and
+`AD_ACC_DIFFERENTIAL=1`. It creates one object of each class through this
+backend, reads it back through **both** this one and `go-adpwsh`, and requires
+the decoded models to be identical. The conformance suite proves each backend
+satisfies the contract; only this proves they agree.
+
+That is why `go-adpwsh` appears in `go.mod`. It is a **test** dependency of
+this one file and nothing in the runtime path imports it — the invariant that
+`go-ldap` lives only in `internal/conn` is unaffected, and so is the rule that
+no Terraform package enters either library.
+
+Its first run found three real divergences, all now fixed: the `$` on a
+computer's and a gMSA's `SamAccountName`, `GenericRead` rendered as its four
+constituent bits, and an absent multi-valued attribute decoding as an empty
+slice on one side and nil on the other.

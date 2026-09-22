@@ -117,13 +117,14 @@ func newClient(ctx context.Context, cfg Config, dial func(context.Context) (conn
 		log:       cfg.Log,
 	}
 
-	var dnc string
+	var dnc, schemaNC, configNC string
 	err := c.withConn(ctx, "New", func(cn conn.Conn) error {
 		res, err := cn.Search(ctx, conn.SearchRequest{
-			BaseDN:     "",
-			Scope:      conn.ScopeBase,
-			Filter:     "(objectClass=*)",
-			Attributes: []string{"defaultNamingContext", "dnsHostName", "schemaNamingContext"},
+			BaseDN: "",
+			Scope:  conn.ScopeBase,
+			Filter: "(objectClass=*)",
+			Attributes: []string{"defaultNamingContext", "dnsHostName",
+				"schemaNamingContext", "configurationNamingContext"},
 		})
 		if err != nil {
 			return err
@@ -132,6 +133,8 @@ func newClient(ctx context.Context, cfg Config, dial func(context.Context) (conn
 			return errors.New("the rootDSE returned no entry")
 		}
 		dnc = res.Entries[0].FirstString("defaultNamingContext")
+		schemaNC = res.Entries[0].FirstString("schemaNamingContext")
+		configNC = res.Entries[0].FirstString("configurationNamingContext")
 		return nil
 	})
 	if err != nil {
@@ -146,6 +149,8 @@ func newClient(ctx context.Context, cfg Config, dial func(context.Context) (conn
 		}
 	}
 	c.dnc = dnc
+	c.schemaNC = schemaNC
+	c.configNC = configNC
 
 	return &Client{core: c}, nil
 }
@@ -207,10 +212,10 @@ func (c *Client) Directory() adcore.Directory {
 		OU:             &ouDirectory{c: c.core},
 		Group:          &groupDirectory{c: c.core},
 		User:           &userDirectory{c: c.core},
-		ServiceAccount: unsupportedServiceAccount{},
-		Computer:       unsupportedComputer{},
-		ACL:            unsupportedACL{},
-		Schema:         unsupportedSchema{},
+		ServiceAccount: &serviceAccountDirectory{c: c.core},
+		Computer:       &computerDirectory{c: c.core},
+		ACL:            &aclDirectory{c: c.core},
+		Schema:         &schemaDirectory{c: c.core},
 		Server:         c.core.server,
 		DNC:            c.core.dnc,
 		Closer:         c,

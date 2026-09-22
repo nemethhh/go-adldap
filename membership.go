@@ -10,33 +10,25 @@ import (
 	"github.com/nemethhh/go-adldap/internal/conn"
 )
 
-// adMultiValueLimit is how many values of a multi-valued attribute a domain
-// controller returns in one read (MaxValRange). Reading exactly this many
-// means there are probably more, and ranged retrieval is required to see them.
-const adMultiValueLimit = 1500
-
 var memberAttrs = []string{"objectGUID", "distinguishedName", "objectClass", "objectSid"}
 
-// Members reads a group's direct membership.
+// Members reads a group's direct membership, following ranged retrieval so a
+// group past the domain controller's MaxValRange reads completely.
 //
-// Until ranged retrieval lands, a membership at the domain controller's
-// MaxValRange boundary is an error rather than a truncated list. Truncating
-// would be worse than failing: Terraform would read a short list, compare it
-// to configuration, and plan the removal of members that exist.
+// Truncating would be worse than failing: Terraform would read a short list,
+// compare it to configuration, and plan the removal of members that exist.
+// That is why this replaced a refusal rather than a silent cap.
 func (g *groupDirectory) Members(ctx context.Context, id adcore.Identity) ([]adcore.Member, error) {
 	const op = "Group.Members"
-	e, err := g.c.getOne(ctx, op, id, "group", []string{"member"})
+	// The DN is resolved first because ranged retrieval is a base-scoped read
+	// per page and every page must name the same object.
+	dn, err := g.c.resolveDN(ctx, op, id)
 	if err != nil {
 		return nil, err
 	}
-	dns := e.Attrs["member"]
-	if len(dns) >= adMultiValueLimit {
-		return nil, &adcore.Error{
-			Kind: adcore.KindTooManyResults, Op: op, Identity: id.String(),
-			Err: fmt.Errorf("the group has at least %d members, which is the domain controller's "+
-				"single-read limit; ranged retrieval is required to read it and is not yet implemented",
-				adMultiValueLimit),
-		}
+	dns, err := g.c.rangedValues(ctx, op, dn, "member")
+	if err != nil {
+		return nil, adcore.WithIdentity(err, op, id)
 	}
 	return g.resolveMembers(ctx, op, dns)
 }

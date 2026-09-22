@@ -101,7 +101,12 @@ func TestAddMembersIsIdempotent(t *testing.T) {
 // Until ranged retrieval lands, a membership at that boundary must error
 // rather than silently return a truncated list — a truncated read would make
 // Terraform plan the removal of members that exist.
-func TestMembersRefusesToTruncate(t *testing.T) {
+// Exactly MaxValRange values used to be refused, because reading them without
+// ranged retrieval could not tell a full page from the whole set. Ranged
+// retrieval landed, so the boundary is now read rather than refused — and the
+// refusal must not come back, because it was a hard failure on a group that is
+// merely large.
+func TestMembersAtTheRangeBoundaryIsNoLongerRefused(t *testing.T) {
 	ctx := context.Background()
 	srv := adtest.StartMemory(t)
 	d := srv.Directory(t)
@@ -122,10 +127,12 @@ func TestMembersRefusesToTruncate(t *testing.T) {
 	entry["member"] = vals
 	srv.Seed("CN=Huge,"+d.DNC, entry)
 
-	_, err = d.Group.Members(ctx, adcore.ByGUID(g.GUID))
-	var e *adcore.Error
-	if !errors.As(err, &e) || e.Kind != adcore.KindTooManyResults {
-		t.Fatalf("want KindTooManyResults at the 1500-value boundary, got %#v", err)
+	if _, err := d.Group.Members(ctx, adcore.ByGUID(g.GUID)); err != nil {
+		var e *adcore.Error
+		if errors.As(err, &e) && e.Kind == adcore.KindTooManyResults {
+			t.Fatalf("the MaxValRange refusal came back: %v", err)
+		}
+		t.Fatalf("Members: %v", err)
 	}
 }
 
