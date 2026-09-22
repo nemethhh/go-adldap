@@ -8,6 +8,7 @@ require (
 	github.com/jimlambrt/gldap v0.1.14
 	github.com/nemethhh/go-adcore v0.2.0
 	github.com/nemethhh/go-adpwsh v0.23.0
+	github.com/oiweiwei/gokrb5.fork/v9 v9.0.6
 )
 
 require (
@@ -27,7 +28,6 @@ require (
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/oiweiwei/gokrb5.fork/v9 v9.0.6 // indirect
 	github.com/pkg/sftp v1.13.11 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect

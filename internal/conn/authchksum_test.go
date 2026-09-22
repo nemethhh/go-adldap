@@ -41,7 +41,6 @@ func TestChecksumWithoutBindingIsUnchangedFromTheLibrary(t *testing.T) {
 			t.Errorf("Bnd[%d] = %d, want 0 when no channel binding is supplied", i, b)
 		}
 	}
-	// Interg|Conf|Mutual == 32|4|2 == 38
 	want := []byte{16, 0, 0, 0}
 	if !bytes.Equal(got[:4], want) {
 		t.Errorf("Lgth = % x, want % x", got[:4], want)
