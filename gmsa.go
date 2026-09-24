@@ -153,7 +153,7 @@ func (s *serviceAccountDirectory) Create(ctx context.Context, spec adcore.GMSASp
 	if err := s.c.withConn(ctx, op, func(cn conn.Conn) error {
 		return cn.Add(ctx, dn, add)
 	}); err != nil {
-		return nil, s.c.annotateAlreadyExists(ctx, err, deletedFilter(gmsaClass, spec.Name, spec.Container))
+		return nil, s.c.annotateAlreadyExists(ctx, err, dn, deletedFilter(gmsaClass, spec.Name, spec.Container))
 	}
 
 	created, err := s.Get(ctx, adcore.ByDN(dn))

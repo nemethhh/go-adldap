@@ -189,7 +189,7 @@ func (cd *computerDirectory) Create(ctx context.Context, spec adcore.ComputerSpe
 	if err := cd.c.withConn(ctx, op, func(cn conn.Conn) error {
 		return cn.Add(ctx, dn, add)
 	}); err != nil {
-		return nil, cd.c.annotateAlreadyExists(ctx, err, deletedFilter("computer", spec.Name, spec.Container))
+		return nil, cd.c.annotateAlreadyExists(ctx, err, dn, deletedFilter("computer", spec.Name, spec.Container))
 	}
 
 	created, err := cd.Get(ctx, adcore.ByDN(dn))
