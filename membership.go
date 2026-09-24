@@ -2,7 +2,6 @@ package adldap
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/nemethhh/go-adcore"
@@ -56,7 +55,7 @@ func (g *groupDirectory) MembersRecursive(ctx context.Context, id adcore.Identit
 	err = g.c.withConn(ctx, op, func(cn conn.Conn) error {
 		res, err := cn.Search(ctx, conn.SearchRequest{
 			BaseDN: g.c.dnc, Scope: conn.ScopeSubtree,
-			Filter: filter, Attributes: memberAttrs, SizeLimit: adcore.DefaultSizeLimit + 1,
+			Filter: filter, Attributes: memberAttrs,
 		})
 		if err != nil {
 			return err
@@ -66,12 +65,6 @@ func (g *groupDirectory) MembersRecursive(ctx context.Context, id adcore.Identit
 	})
 	if err != nil {
 		return nil, adcore.WithIdentity(err, op, id)
-	}
-	if len(entries) > adcore.DefaultSizeLimit {
-		return nil, &adcore.Error{
-			Kind: adcore.KindTooManyResults, Op: op, Identity: id.String(),
-			Err: fmt.Errorf("more than %d recursive members", adcore.DefaultSizeLimit),
-		}
 	}
 	return g.modelMembers(entries)
 }

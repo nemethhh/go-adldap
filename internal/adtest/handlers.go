@@ -1,6 +1,8 @@
 package adtest
 
 import (
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jimlambrt/gldap"
@@ -77,6 +79,45 @@ func (s *Server) handleSearch(w *gldap.ResponseWriter, r *gldap.Request) {
 		return
 	}
 
+	sort.Slice(hits, func(i, j int) bool { return hits[i].dn < hits[j].dn })
+
+	// A DC answers at most MaxPageSize entries per response. Without the paging
+	// control that is the whole answer, and it ends in sizeLimitExceeded; with
+	// it, each response carries a page and a cookie for the next.
+	if paging := pagingControl(m.Controls); paging != nil {
+		offset := 0
+		if len(paging.Cookie) > 0 {
+			offset, _ = strconv.Atoi(string(paging.Cookie))
+		}
+		size := int(paging.PagingSize)
+		if size <= 0 || size > MaxPageSize {
+			size = MaxPageSize
+		}
+		end := min(offset+size, len(hits))
+		for _, h := range hits[offset:end] {
+			entry := r.NewSearchResponseEntry(h.dn)
+			addAttrs(entry, h.attrs, m.Attributes)
+			_ = w.Write(entry)
+		}
+		next := &gldap.ControlPaging{}
+		if end < len(hits) {
+			next.Cookie = []byte(strconv.Itoa(end))
+		}
+		resp := r.NewSearchDoneResponse(gldap.WithResponseCode(gldap.ResultSuccess))
+		resp.SetControls(next)
+		done = resp
+		return
+	}
+	if len(hits) > MaxPageSize && (m.SizeLimit == 0 || m.SizeLimit > int64(MaxPageSize)) {
+		for _, h := range hits[:MaxPageSize] {
+			entry := r.NewSearchResponseEntry(h.dn)
+			addAttrs(entry, h.attrs, m.Attributes)
+			_ = w.Write(entry)
+		}
+		done = r.NewSearchDoneResponse(gldap.WithResponseCode(gldap.ResultSizeLimitExceeded))
+		return
+	}
+
 	// SizeLimit is honoured exactly as a DC honours it: the server stops and
 	// says so, rather than quietly returning a short answer.
 	if m.SizeLimit > 0 && int64(len(hits)) > m.SizeLimit {
@@ -126,21 +167,7 @@ func inScope(dn, base string, scope gldap.Scope) bool {
 // Values cross as strings because that is gldap's API; a Go string is an
 // arbitrary byte sequence, so a binary objectGUID survives intact.
 func addAttrs(e *gldap.SearchResponseEntry, attrs map[string][][]byte, requested []string) {
-	want := func(name string) bool {
-		if len(requested) == 0 {
-			return true
-		}
-		for _, r := range requested {
-			if strings.EqualFold(r, name) || r == "*" {
-				return true
-			}
-		}
-		return false
-	}
-	for name, vals := range attrs {
-		if !want(name) {
-			continue
-		}
+	for name, vals := range rangePages(project(attrs, requested), requested, MaxValRange) {
 		out := make([]string, 0, len(vals))
 		for _, v := range vals {
 			out = append(out, string(v))
@@ -456,6 +483,22 @@ func (s *Server) handleDelete(w *gldap.ResponseWriter, r *gldap.Request) {
 // showDeletedOID is repeated rather than imported from adldap: importing the
 // parent package from a package it imports would be a cycle.
 const showDeletedOID = "1.2.840.113556.1.4.417"
+
+// MaxPageSize and MaxValRange are the LDAP policy values a default domain
+// controller enforces.
+const (
+	MaxPageSize = 1000
+	MaxValRange = 1500
+)
+
+func pagingControl(controls []gldap.Control) *gldap.ControlPaging {
+	for _, c := range controls {
+		if p, ok := c.(*gldap.ControlPaging); ok {
+			return p
+		}
+	}
+	return nil
+}
 
 func hasGldapControl(controls []gldap.Control, oid string) bool {
 	for _, c := range controls {
