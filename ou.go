@@ -132,7 +132,7 @@ func (o *ouDirectory) Create(ctx context.Context, spec adcore.OUSpec) (*adcore.O
 	if err := o.c.withConn(ctx, op, func(cn conn.Conn) error {
 		return cn.Add(ctx, dn, add)
 	}); err != nil {
-		return nil, o.c.annotateAlreadyExists(ctx, err, deletedFilter("organizationalUnit", spec.Name, spec.Container))
+		return nil, o.c.annotateAlreadyExists(ctx, err, dn, deletedFilter("organizationalUnit", spec.Name, spec.Container))
 	}
 
 	// Protection is a second operation: AD has no way to create an object with

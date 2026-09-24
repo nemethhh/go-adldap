@@ -44,20 +44,24 @@ func (c *core) probeDeleted(ctx context.Context, filter string) ([]deletedMatch,
 	return out, nil
 }
 
-// annotateAlreadyExists upgrades an already-exists error with the deleted
-// object that caused it, when there is one.
+// annotateAlreadyExists names the object an already-exists error collided
+// with: the deleted object that holds the name when there is one, otherwise
+// the live object at dn — the DN the create tried to add.
 //
 // A probe failure is swallowed deliberately: the original error is the one the
 // caller needs, and the annotation is a courtesy. Replacing a precise
 // already-exists with a probe's transport failure would be a worse message.
-func (c *core) annotateAlreadyExists(ctx context.Context, err error, filter string) error {
+func (c *core) annotateAlreadyExists(ctx context.Context, err error, dn, filter string) error {
 	var e *adcore.Error
 	if !asError(err, &e) || e.Kind != adcore.KindAlreadyExists {
 		return err
 	}
+	if e.Target == "" {
+		e.Target = dn
+	}
 	matches, probeErr := c.probeDeleted(ctx, filter)
 	if probeErr != nil || len(matches) == 0 {
-		return err
+		return e
 	}
 	e.Tombstoned = true
 	e.Target = matches[0].DN
