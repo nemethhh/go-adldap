@@ -49,6 +49,16 @@ func (c *core) withConn(ctx context.Context, op string, fn func(conn.Conn) error
 	for attempt := 1; attempt <= c.retry.MaxAttempts; attempt++ {
 		lease, err := c.pool.Acquire(ctx)
 		if err != nil {
+			// A bind the DC refused carries its LDAP result, and a wrong
+			// password is not a transport failure. Only a connection that
+			// never produced a result is.
+			var raw *conn.RawError
+			if errors.As(err, &raw) {
+				return ldaperr.Classify(op, err)
+			}
+			if errors.Is(err, conn.ErrCredentialRejected) {
+				return &adcore.Error{Kind: adcore.KindDenied, Op: op, Err: err}
+			}
 			return &adcore.Error{Kind: adcore.KindTransport, Op: op, Err: err}
 		}
 

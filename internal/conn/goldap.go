@@ -50,6 +50,8 @@ func toRawError(err error) error {
 	return err
 }
 
+const pageSize = 1000
+
 func (c *goldapConn) Search(ctx context.Context, req SearchRequest) (*SearchResult, error) {
 	controls := make([]ldap.Control, 0, len(req.Controls))
 	for _, ct := range req.Controls {
@@ -59,7 +61,16 @@ func (c *goldapConn) Search(ctx context.Context, req SearchRequest) (*SearchResu
 		req.BaseDN, scopeToGoLDAP(req.Scope), ldap.NeverDerefAliases,
 		req.SizeLimit, 0, false, req.Filter, req.Attributes, controls,
 	)
-	res, err := c.l.Search(sr)
+	var res *ldap.SearchResult
+	var err error
+	if req.Scope == ScopeBase {
+		res, err = c.l.Search(sr)
+	} else {
+		// A domain controller answers an unpaged search with at most
+		// MaxPageSize entries (1000 by default) and then sizeLimitExceeded,
+		// whatever SizeLimit asked for.
+		res, err = c.l.SearchWithPaging(sr, pageSize)
+	}
 	if err != nil {
 		return nil, toRawError(err)
 	}
