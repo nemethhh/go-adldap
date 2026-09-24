@@ -150,6 +150,15 @@ func (b KerberosBinder) Bind(ctx context.Context, c Conn) error {
 // Setting the option makes the two agree and the bind succeeds.
 func apOptions() []int { return []int{flags.APOptionMutualRequired} }
 
+// ErrCredentialRejected marks a bind the KDC refused because of the
+// credential itself, as distinct from a KDC that could not be reached.
+var ErrCredentialRejected = errors.New("adldap: the KDC rejected the credential")
+
+type rejected struct{ error }
+
+func (r rejected) Is(target error) bool { return target == ErrCredentialRejected }
+func (r rejected) Unwrap() error        { return r.error }
+
 // annotateTicketError turns terse Kerberos failures into something an operator
 // can act on.
 func annotateTicketError(err error) error {
@@ -161,12 +170,14 @@ func annotateTicketError(err error) error {
 	case strings.Contains(msg, "TGT not found in CCache"):
 		return fmt.Errorf("%w: the credential cache holds no ticket-granting ticket; run kinit again", err)
 	case strings.Contains(msg, "KDC_ERR_PREAUTH_FAILED"):
-		return fmt.Errorf("%w: the KDC rejected the credential; the password is wrong, or the "+
-			"account is disabled or locked out", err)
+		return rejected{fmt.Errorf("%w: the KDC rejected the credential; the password is wrong, or the "+
+			"account is disabled or locked out", err)}
 	case strings.Contains(msg, "KDC_ERR_C_PRINCIPAL_UNKNOWN"):
-		return fmt.Errorf("%w: the KDC does not know that principal; check both the username and "+
+		return rejected{fmt.Errorf("%w: the KDC does not know that principal; check both the username and "+
 			"the realm — when Kerberos.Realm is unset it is derived from Config.Server's domain "+
-			"suffix, uppercased", err)
+			"suffix, uppercased", err)}
+	case strings.Contains(msg, "KDC_ERR_CLIENT_REVOKED"):
+		return rejected{fmt.Errorf("%w: the account is disabled, locked out or expired", err)}
 	case strings.Contains(msg, "expired"), strings.Contains(msg, "Ticket expired"):
 		return fmt.Errorf("%w: the Kerberos ticket has expired; run kinit again "+
 			"(AD's default ticket lifetime is 10 hours and it is not renewed automatically)", err)

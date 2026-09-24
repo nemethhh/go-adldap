@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -106,5 +107,20 @@ func TestPeerCertificateWithoutTLSStateReturnsNil(t *testing.T) {
 func TestPeerCertificateWithNoCertificatesReturnsNil(t *testing.T) {
 	if got := peerCertificate(tls.ConnectionState{}, true); got != nil {
 		t.Errorf("peerCertificate = %v, want nil when the connection carries no peer certificates", got)
+	}
+}
+
+func TestAKDCCredentialRejectionIsMarkedRejected(t *testing.T) {
+	for _, msg := range []string{
+		"KRB Error: (24) KDC_ERR_PREAUTH_FAILED Pre-authentication information was invalid",
+		"KRB Error: (6) KDC_ERR_C_PRINCIPAL_UNKNOWN Client not found in Kerberos database",
+		"KRB Error: (18) KDC_ERR_CLIENT_REVOKED Clients credentials have been revoked",
+	} {
+		if err := annotateTicketError(errors.New(msg)); !errors.Is(err, ErrCredentialRejected) {
+			t.Errorf("%q: not marked ErrCredentialRejected: %v", msg, err)
+		}
+	}
+	if err := annotateTicketError(errors.New("KRB Error: (29) KDC_ERR_SVC_UNAVAILABLE")); errors.Is(err, ErrCredentialRejected) {
+		t.Error("an unavailable KDC was marked as a rejected credential")
 	}
 }
